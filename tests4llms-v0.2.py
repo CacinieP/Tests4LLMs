@@ -4,13 +4,43 @@ Tests4LLMs — LLM API Benchmark (Single Script)
 
 Outputs: result.json (raw details) + report.md (summary with tables)
 
+支持的 API（OpenAI 兼容格式），修改 --base-url / --api-key-env / --model 即可切换：
+
+## 1. 智谱 Zhipu AI
+# export ZHIPU_API_KEY="..."
+# python tests4llms.py --base-url https://open.bigmodel.cn/api/paas/v4 --api-key-env ZHIPU_API_KEY --model glm-5
+
+## 2. MiniMax
+# export MINIMAX_API_KEY="..."
+# python tests4llms.py --base-url https://api.minimax.io/v1 --api-key-env MINIMAX_API_KEY --model MiniMax-M2.7
+
+## 3. Kimi（月之暗面 Moonshot）
+# export MOONSHOT_API_KEY="..."
+# python tests4llms.py --base-url https://api.moonshot.cn/v1 --api-key-env MOONSHOT_API_KEY --model kimi-k2.5
+
+## 4. StepFun（阶跃星辰）
+# export STEP_API_KEY="..."
+# python tests4llms.py --base-url https://api.stepfun.com/v1 --api-key-env STEP_API_KEY --model step-3.5-flash
+
+## 5. Google Gemini
+# export GEMINI_API_KEY="..."
+# python tests4llms.py --base-url https://generativelanguage.googleapis.com/v1beta/openai/ --api-key-env GEMINI_API_KEY --model gemini-3.1-pro-preview
+
+## 6. OpenAI
+# export OPENAI_API_KEY="..."
+# python tests4llms.py --base-url https://api.openai.com/v1 --api-key-env OPENAI_API_KEY --model gpt-5.4
+
+## 7. Anthropic
+# export ANTHROPIC_API_KEY="..."
+# python tests4llms.py --base-url https://api.anthropic.com/v1/ --api-key-env ANTHROPIC_API_KEY --model claude-opus-4-6
+
 Usage:
   pip install aiohttp
 
   python tests4llms.py \\
     --base-url https://api.openai.com/v1 \\
     --api-key-env OPENAI_API_KEY \\
-    --model gpt-4o \\
+    --model gpt-5.4 \\
     --concurrency 1,5,10,20 \\
     --rounds 10 \\
     --max-tokens 100
@@ -19,7 +49,7 @@ Usage:
   python tests4llms.py \\
     --base-url https://api.openai.com/v1 \\
     --api-key sk-xxx \\
-    --model gpt-4o \\
+    --model gpt-5.4 \\
     --concurrency 1,5,10 \\
     --rounds 10 \\
     --stream
@@ -50,9 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python tests4llms.py --base-url https://api.openai.com/v1 "
-            "--api-key-env OPENAI_API_KEY --model gpt-4o\n"
+            "--api-key-env OPENAI_API_KEY --model gpt-5.4\n"
             "  python tests4llms.py --base-url https://open.bigmodel.cn/api/paas/v4 "
-            "--api-key-env ZHIPU_API_KEY --model glm-4-flash --stream\n"
+            "--api-key-env ZHIPU_API_KEY --model glm-5 --stream\n"
         ),
     )
 

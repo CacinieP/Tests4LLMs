@@ -16,7 +16,7 @@ pip install aiohttp
 python tests4llms-v0.2.py \
   --base-url https://open.bigmodel.cn/api/paas/v4 \
   --api-key-env ZHIPU_API_KEY \
-  --model glm-4-flash \
+  --model glm-5 \
   --concurrency 1,5,10,20 \
   --rounds 10 \
   --max-tokens 100
@@ -28,7 +28,7 @@ Streaming (with TTFT measurement) / 流式模式（含首字延迟测量）：
 python tests4llms-v0.2.py \
   --base-url https://api.openai.com/v1 \
   --api-key sk-xxx \
-  --model gpt-4o \
+  --model gpt-5.4 \
   --concurrency 1,5,10 \
   --rounds 10 \
   --stream
@@ -76,11 +76,15 @@ python tests4llms-v0.2.py \
 Any OpenAI-compatible API, e.g.:
 所有兼容 OpenAI 格式的 API，例如：
 
-- Zhipu AI / 智谱 (`https://open.bigmodel.cn/api/paas/v4`)
-- OpenAI (`https://api.openai.com/v1`)
-- Anthropic via OpenAI compat / Anthropic OpenAI 兼容接口 (`https://api.anthropic.com/v1/`)
-- Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`)
-- MiniMax, Kimi/Moonshot / 月之暗面, StepFun / 阶跃星辰, DeepSeek / 深度求索, etc.
+| Provider / 供应商 | --base-url | --api-key-env | --model |
+|-------------------|------------|---------------|---------|
+| 智谱 Zhipu AI | `https://open.bigmodel.cn/api/paas/v4` | `ZHIPU_API_KEY` | `glm-5` |
+| MiniMax | `https://api.minimax.io/v1` | `MINIMAX_API_KEY` | `MiniMax-M2.7` |
+| Kimi / 月之暗面 Moonshot | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` | `kimi-k2.5` |
+| StepFun / 阶跃星辰 | `https://api.stepfun.com/v1` | `STEP_API_KEY` | `step-3.5-flash` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` | `gemini-3.1-pro-preview` |
+| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.4` |
+| Anthropic | `https://api.anthropic.com/v1/` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 
 ---
 
