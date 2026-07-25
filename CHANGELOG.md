@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module as well as the main script.
 
 ### Fixed
+- Streaming TTFT now recognizes `delta.reasoning_content`, used by reasoning
+  models such as Kimi-K3, in addition to `delta.content` and `delta.text`.
 - Streaming requests stop reading as soon as `[DONE]` arrives instead of
   waiting for the server to close the connection.
 - HTTP 200 streams with no completion chunks, and streams that end before

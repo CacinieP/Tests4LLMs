@@ -214,6 +214,37 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(result.ttft_ms, 0)
         self.assertEqual(result.tokens_completion, 1)
 
+    async def test_reasoning_content_sets_ttft(self):
+        async def handler(request):
+            response = web.StreamResponse(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+            )
+            await response.prepare(request)
+            await response.write(
+                b'data: {"choices":[{"delta":{"content":"",'
+                b'"role":"assistant"},"finish_reason":null}]}\n\n'
+                b'data: {"choices":[{"delta":{"role":"assistant",'
+                b'"reasoning_content":"thinking"},"finish_reason":null}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":""},'
+                b'"finish_reason":"length"}],"usage":{"prompt_tokens":1,'
+                b'"completion_tokens":2,"total_tokens":3}}\n\n'
+                b"data: [DONE]\n\n"
+            )
+            await response.write_eof()
+            return response
+
+        base_url = await self.start_server(handler)
+        async with BENCH.LLMClient(
+            base_url, "test-key", "test-model", stream=True
+        ) as client:
+            result = await client.chat("hello")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status_code, 200)
+        self.assertGreater(result.ttft_ms, 0)
+        self.assertEqual(result.tokens_completion, 2)
+
     async def test_truncated_stream_is_failure(self):
         async def handler(request):
             response = web.StreamResponse(
