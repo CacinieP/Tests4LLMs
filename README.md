@@ -9,10 +9,7 @@ Single script, zero config files, all parameters via CLI.
 **Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-
-**Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
-
-> `legacy/tests4llms-v0.1.py` is **deprecated** and kept for reference only — it has hardcoded provider config, an unused `keepalive_connections` param, and prints part of the API key. Use `tests4llms-v0.2.py`.
+> `legacy/tests4llms-v0.1.py` is **deprecated** and kept for reference only — it has hardcoded provider config and an unused `keepalive_connections` parameter. Use `tests4llms-v0.2.py`.
 
 ---
 
@@ -91,6 +88,7 @@ Fire `concurrency` requests **simultaneously**, repeat `--rounds` times.
 | `--rounds` | `1` | Burst: repeat count per level / 瞬发模式每级重复次数 |
 | `--duration` | `30` | Steady: test duration in seconds / 稳态模式时长（秒） |
 | `--max-tokens` | `100` | Max tokens per request / 单次最大 token 数 |
+| `--token-param` | provider-specific | Output-token request field: `max_tokens` or `max_completion_tokens` / 输出 token 请求字段 |
 | `--stream` | off | Enable streaming, measures TTFT / 流式 + 首字延迟 |
 | `--prompt` | `Count from 1 to 10.` | Test prompt / 测试提示词 |
 | `--timeout` | `120` | Request timeout in seconds / 超时（秒） |
@@ -143,11 +141,16 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | 智谱 Zhipu AI | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` | `ZHIPU_API_KEY` | `glm-5` |
 | MiniMax | `minimax` | `https://api.minimax.io/v1` | `MINIMAX_API_KEY` | `MiniMax-M2.7` |
 | Kimi / 月之暗面 Moonshot | `kimi` | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` | `kimi-k2.5` |
-| StepFun / 阶跃星辰 | `stepfun` | `https://api.stepfun.com/v1` | `STEP_API_KEY` | `step-3.5-flash` |
+| StepFun / 阶跃星辰 | `stepfun` | `https://api.stepfun.com/v1` | `STEP_API_KEY` | `step-3.7-flash` |
 | Google Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` | `gemini-3.1-pro-preview` |
 | OpenAI | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.4` |
+| Anthropic | `anthropic` | `https://api.anthropic.com/v1/` | `ANTHROPIC_API_KEY` | `claude-opus-5` |
 
-> **Note on Anthropic:** the native Anthropic API is *not* OpenAI-compatible (different auth header, no `/chat/completions`), so it is not a built-in preset. Point `--base-url` at Anthropic's OpenAI-compatible proxy if you need it.
+> **Anthropic:** this preset uses Anthropic's official OpenAI SDK compatibility layer. It is suitable for testing and evaluation, including streaming and usage reporting.
+
+Provider presets also choose a compatible output-token field. OpenAI uses
+`max_completion_tokens`; the other presets use `max_tokens`. Manual endpoints
+default to `max_tokens` and can override it with `--token-param`.
 
 ---
 
@@ -155,22 +158,21 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 
 > Full history: [CHANGELOG.md](CHANGELOG.md)
 
-### v0.2.1 (`tests4llms-v0.2.py`) — current / 当前版本
+### Unreleased (`tests4llms-v0.2.py`) — current / 当前版本
 
-The "repair" release: correctness, streaming robustness, real CI, docs.
+Correctness and coverage follow-up to v0.2.1.
 
 | EN | 中文 |
 |----|------|
-| Removed Anthropic preset (native API isn't OpenAI-compatible) | 移除 Anthropic 预设（原生 API 非 OpenAI 兼容） |
-| Burst mode now reports both `req_per_sec` (avg) and `peak_req_per_sec` (fastest round) | burst 模式新增 `peak_req_per_sec`（最快一轮峰值） |
-| Streaming TTFT now detects `delta.content` and `delta.text` across providers | 流式 TTFT 兼容 `delta.content` / `delta.text` 多种格式 |
-| Mid-stream timeout/error now produces a proper `BenchResult` instead of crashing the batch | 流式中途超时/异常不再让整批崩溃，生成失败结果 |
-| Same fixed prompt for every request (fair comparison + prompt-cache friendly) | 每个请求使用相同固定 prompt（公平对比，利于命中 prompt cache） |
-| CI no longer swallows failures (`|| true` removed); adds compile-check + smoke test | CI 不再用 `|| true` 掩盖失败；新增编译检查与冒烟测试 |
-| `requirements.txt` added; Python >= 3.9 declared | 新增 `requirements.txt`；声明 Python >= 3.9 |
-| v0.1 archived under `legacy/` with deprecation notice | v0.1 归档至 `legacy/` 并标注废弃 |
+| Empty or truncated streams are failures; `[DONE]` ends a request immediately | 空流或截断流会判定失败；收到 `[DONE]` 立即结束请求 |
+| Invalid concurrency, duration, rounds, timeout, and token limits fail fast | 非法并发、时长、轮次、超时和 token 上限会立即报错 |
+| The connection pool automatically matches the highest requested concurrency | 连接池会自动匹配最高并发级别 |
+| Provider-specific output-token parameters, including OpenAI `max_completion_tokens` | 按供应商选择输出 token 参数，包括 OpenAI 的 `max_completion_tokens` |
+| Restored Anthropic through its official OpenAI SDK compatibility layer | 通过 Anthropic 官方 OpenAI SDK 兼容层恢复 Anthropic 预设 |
+| Behavioral tests now cover CLI validation, streaming, payloads, and pool sizing | 新增行为测试，覆盖参数校验、流式响应、请求载荷和连接池 |
+| Legacy v0.1 no longer logs any API-key prefix | 旧版 v0.1 不再输出 API 密钥前缀 |
 
-Earlier versions (v0.2, v0.1) are documented in [CHANGELOG.md](CHANGELOG.md).
+Earlier versions are documented in [CHANGELOG.md](CHANGELOG.md).
 
 
 ---

@@ -8,19 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Behavioral tests using a local `aiohttp` server. They cover argument
+  validation, provider defaults, request payloads, connection-pool sizing,
+  empty streams, truncated streams, `[DONE]`, and compatible streams that
+  finish without a `[DONE]` marker.
+- `--token-param` for endpoints that need an explicit
+  `max_tokens`/`max_completion_tokens` override.
+
+### Changed
+- The connection-pool limit now matches the highest requested concurrency
+  instead of silently capping every run at 256 connections.
+- OpenAI requests use the current `max_completion_tokens` field. Other
+  provider presets use `max_tokens`.
+- The StepFun preset now defaults to the verified `step-3.7-flash` model.
+- Steady-mode workers no longer sleep between requests, so the mode measures
+  sustained endpoint throughput without client-side pacing.
+- CI now runs the behavioral test suite and compile-checks and lints the test
+  module as well as the main script.
+
+### Fixed
+- Streaming requests stop reading as soon as `[DONE]` arrives instead of
+  waiting for the server to close the connection.
+- HTTP 200 streams with no completion chunks, and streams that end before
+  `[DONE]` or a `finish_reason`, are now failures rather than false successes.
+- Non-stream HTTP 200 responses without completion choices are also failures.
+- Invalid empty, non-integer, zero, or negative concurrency values fail fast.
+  Burst rounds, steady duration, timeout, max tokens, warmup count, and output
+  directory are also validated before the benchmark starts.
+- Restored the Anthropic preset through Anthropic's official OpenAI SDK
+  compatibility endpoint, using `claude-opus-5`.
+- The deprecated v0.1 script no longer prints any part of the API key.
+
 ## [0.2.1] - 2026-07-25
 
 The "repair" release: correctness fixes, streaming robustness, a real CI, and
-documentation cleanup. No CLI breaking changes — `--provider` users just lose
-the `anthropic` preset (which never actually worked).
+documentation cleanup. This release temporarily removed the `anthropic`
+preset because its compatibility endpoint was mistaken for a third-party
+proxy; the preset is restored under Unreleased.
 
 ### Removed
-- **Anthropic provider preset.** The native Anthropic API is not
-  OpenAI-compatible (no `/chat/completions` endpoint, requires `x-api-key`
-  + `anthropic-version` headers instead of `Authorization: Bearer`). Sending
-  requests to `https://api.anthropic.com/v1/chat/completions` always failed,
-  so the preset was misleading. To benchmark Anthropic, point `--base-url` at
-  their OpenAI-compatible proxy.
+- **Anthropic provider preset (temporary).** It was removed based on an
+  incorrect compatibility assumption and is restored under Unreleased using
+  Anthropic's official OpenAI SDK compatibility layer.
 - Duplicated `PROVIDER_NAMES` constant. The `--provider` help text is now
   generated from the `PROVIDERS` dict, so the two can never drift.
 
@@ -67,7 +97,8 @@ the `anthropic` preset (which never actually worked).
 
 ### Deprecated
 - `tests4llms-v0.1.py` moved to **`legacy/tests4llms-v0.1.py`** with a
-  deprecation banner. Known unfixed issues (do not use in production):
+  deprecation banner. Known limitations at the time (do not use in
+  production):
   hardcoded provider config (no `--provider` flag), `LLMClient.__init__`
   accepts `keepalive_connections` but never applies it, prints the first 12
   characters of the API key, and `top_errors()` can split UTF-8 multibyte

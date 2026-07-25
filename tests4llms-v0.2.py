@@ -9,46 +9,46 @@ Outputs: result.json (raw details) + report.md (summary with tables)
 支持的 API（OpenAI 兼容格式），使用 --provider 快捷切换或手动指定参数：
 
 ## 1. 智谱 Zhipu AI
-# python tests4llms.py --provider zhipu
+# python tests4llms-v0.2.py --provider zhipu
 # 或手动指定:
-# python tests4llms.py --base-url https://open.bigmodel.cn/api/paas/v4 --api-key-env ZHIPU_API_KEY --model glm-5
+# python tests4llms-v0.2.py --base-url https://open.bigmodel.cn/api/paas/v4 --api-key-env ZHIPU_API_KEY --model glm-5
 
 ## 2. MiniMax
-# python tests4llms.py --provider minimax
+# python tests4llms-v0.2.py --provider minimax
 
 ## 3. Kimi（月之暗面 Moonshot）
-# python tests4llms.py --provider kimi
+# python tests4llms-v0.2.py --provider kimi
 
 ## 4. StepFun（阶跃星辰）
-# python tests4llms.py --provider stepfun
+# python tests4llms-v0.2.py --provider stepfun
 
 ## 5. Google Gemini
-# python tests4llms.py --provider gemini
+# python tests4llms-v0.2.py --provider gemini
 
 ## 6. OpenAI
-# python tests4llms.py --provider openai
+# python tests4llms-v0.2.py --provider openai
 
 ## 7. Anthropic
-# python tests4llms.py --provider anthropic
+# python tests4llms-v0.2.py --provider anthropic
 
 Usage:
   pip install aiohttp
 
   # Burst mode: 瞬时并发测试
-  python tests4llms.py \\
+  python tests4llms-v0.2.py \\
     --provider openai \\
     --concurrency 1,5,10,20 \\
     --rounds 3
 
   # Steady mode: 持续吞吐测试
-  python tests4llms.py \\
+  python tests4llms-v0.2.py \\
     --provider openai \\
     --mode steady \\
     --concurrency 5,10 \\
     --duration 30
 
   # Streaming (TTFT measurement)
-  python tests4llms.py \\
+  python tests4llms-v0.2.py \\
     --provider openai \\
     --concurrency 1,5,10 \\
     --stream
@@ -82,10 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python tests4llms.py --provider zhipu --concurrency 1,5,10\n"
-            "  python tests4llms.py --provider openai --mode steady "
+            "  python tests4llms-v0.2.py --provider zhipu "
+            "--concurrency 1,5,10\n"
+            "  python tests4llms-v0.2.py --provider openai --mode steady "
             "--concurrency 5,10 --duration 30\n"
-            "  python tests4llms.py --base-url https://api.openai.com/v1 "
+            "  python tests4llms-v0.2.py "
+            "--base-url https://api.openai.com/v1 "
             "--api-key-env OPENAI_API_KEY --model gpt-5.4 --stream\n"
         ),
     )
@@ -102,6 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Model name to benchmark. Optional if --provider is used.")
     g.add_argument("--provider", default="",
                    help=f"Provider preset: {', '.join(PROVIDERS)}")
+    g.add_argument(
+        "--token-param",
+        choices=["max_tokens", "max_completion_tokens"],
+        default="",
+        help="Output-token request field. Provider presets choose a compatible "
+             "default; manual configuration defaults to max_tokens.",
+    )
 
     g = p.add_argument_group("Mode")
     g.add_argument("--mode", choices=["burst", "steady"], default="burst",
@@ -148,7 +157,21 @@ def resolve_api_key(args) -> str:
 
 
 def parse_concurrency(s: str) -> List[int]:
-    return sorted(set(int(x.strip()) for x in s.split(",") if x.strip()))
+    try:
+        levels = [int(x.strip()) for x in s.split(",") if x.strip()]
+    except ValueError as exc:
+        raise SystemExit(
+            "ERROR: --concurrency must be a comma-separated list of integers"
+        ) from exc
+    if not levels:
+        raise SystemExit("ERROR: --concurrency must contain at least one level")
+    invalid = sorted(set(level for level in levels if level <= 0))
+    if invalid:
+        values = ", ".join(str(level) for level in invalid)
+        raise SystemExit(
+            f"ERROR: --concurrency levels must be positive; got: {values}"
+        )
+    return sorted(set(levels))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -160,31 +183,43 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "key_env": "ZHIPU_API_KEY",
         "model": "glm-5",
+        "token_param": "max_tokens",
     },
     "minimax": {
         "base_url": "https://api.minimax.io/v1",
         "key_env": "MINIMAX_API_KEY",
         "model": "MiniMax-M2.7",
+        "token_param": "max_tokens",
     },
     "kimi": {
         "base_url": "https://api.moonshot.cn/v1",
         "key_env": "MOONSHOT_API_KEY",
         "model": "kimi-k2.5",
+        "token_param": "max_tokens",
     },
     "stepfun": {
         "base_url": "https://api.stepfun.com/v1",
         "key_env": "STEP_API_KEY",
-        "model": "step-3.5-flash",
+        "model": "step-3.7-flash",
+        "token_param": "max_tokens",
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "key_env": "GEMINI_API_KEY",
         "model": "gemini-3.1-pro-preview",
+        "token_param": "max_tokens",
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "key_env": "OPENAI_API_KEY",
         "model": "gpt-5.4",
+        "token_param": "max_completion_tokens",
+    },
+    "anthropic": {
+        "base_url": "https://api.anthropic.com/v1/",
+        "key_env": "ANTHROPIC_API_KEY",
+        "model": "claude-opus-5",
+        "token_param": "max_tokens",
     },
 }
 
@@ -206,6 +241,8 @@ def apply_provider(args):
         args.api_key_env = preset["key_env"]
     if not args.model:
         args.model = preset["model"]
+    if not args.token_param:
+        args.token_param = preset["token_param"]
 
 
 def validate_args(args):
@@ -214,6 +251,20 @@ def validate_args(args):
         raise SystemExit("ERROR: --base-url is required (or use --provider)")
     if not args.model:
         raise SystemExit("ERROR: --model is required (or use --provider)")
+    if not args.token_param:
+        args.token_param = "max_tokens"
+    if args.mode == "burst" and args.rounds <= 0:
+        raise SystemExit("ERROR: --rounds must be positive in burst mode")
+    if args.mode == "steady" and args.duration <= 0:
+        raise SystemExit("ERROR: --duration must be positive in steady mode")
+    if args.max_tokens <= 0:
+        raise SystemExit("ERROR: --max-tokens must be positive")
+    if args.timeout <= 0:
+        raise SystemExit("ERROR: --timeout must be positive")
+    if args.warmup < 0:
+        raise SystemExit("ERROR: --warmup cannot be negative")
+    if not str(args.output_dir).strip():
+        raise SystemExit("ERROR: --output-dir cannot be empty")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -237,14 +288,21 @@ class LLMClient:
     """Async LLM client with connection pooling (OpenAI-compatible)."""
 
     def __init__(self, base_url: str, api_key: str, model: str,
-                 timeout_s: float = 120.0, stream: bool = False):
+                 timeout_s: float = 120.0, stream: bool = False,
+                 max_connections: int = 256,
+                 token_param: str = "max_tokens"):
+        if max_connections <= 0:
+            raise ValueError("max_connections must be positive")
+        if token_param not in {"max_tokens", "max_completion_tokens"}:
+            raise ValueError(f"unsupported token parameter: {token_param}")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.stream = stream
+        self.token_param = token_param
         self.timeout = aiohttp.ClientTimeout(total=timeout_s)
         self.connector = aiohttp.TCPConnector(
-            limit=256, limit_per_host=256,
+            limit=max_connections, limit_per_host=max_connections,
             keepalive_timeout=30, enable_cleanup_closed=True,
             ttl_dns_cache=300,
         )
@@ -270,7 +328,7 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
+            self.token_param: max_tokens,
             "stream": self.stream,
         }
         start = time.perf_counter()
@@ -293,7 +351,15 @@ class LLMClient:
                 return BenchResult(False, resp.status, latency_ms,
                                    error=text[:2000])
             data = json.loads(await resp.text())
+            choices = data.get("choices") if isinstance(data, dict) else None
+            if not isinstance(choices, list) or not choices:
+                return BenchResult(
+                    False, resp.status, latency_ms,
+                    error="response contained no completion choices",
+                )
             usage = data.get("usage") or {}
+            if not isinstance(usage, dict):
+                usage = {}
             pt = int(usage.get("prompt_tokens", 0) or 0)
             ct = int(usage.get("completion_tokens", 0) or 0)
             tt = int(usage.get("total_tokens", 0) or 0)
@@ -307,9 +373,14 @@ class LLMClient:
         payload = {**payload, "stream_options": {"include_usage": True}}
         ttft_ms = 0.0
         pt = ct = tt = 0
+        response_status = 0
+        saw_choice = False
+        saw_finish_reason = False
+        saw_done = False
 
         try:
             async with self.session.post(url, json=payload) as resp:
+                response_status = resp.status
                 if resp.status // 100 != 2:
                     latency_ms = (time.perf_counter() - start) * 1000
                     text = await resp.text()
@@ -329,45 +400,83 @@ class LLMClient:
                         continue
 
                     if payload_str == "[DONE]":
-                        continue
+                        saw_done = True
+                        break
                     try:
                         chunk = json.loads(payload_str)
                     except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
                         continue
 
                     # TTFT: first content-bearing delta.
                     # Different providers expose content under different keys:
                     #   OpenAI/Anthropic-compat: choices[0].delta.content
                     #   some gateways:           choices[0].delta.text
-                    if ttft_ms == 0:
-                        choices = chunk.get("choices", []) or []
-                        if choices:
-                            delta = choices[0].get("delta") or {}
-                            content = delta.get("content") or delta.get("text")
-                            if content:
-                                ttft_ms = (time.perf_counter() - start) * 1000
+                    choices = chunk.get("choices", []) or []
+                    if (isinstance(choices, list) and choices
+                            and isinstance(choices[0], dict)):
+                        saw_choice = True
+                        choice = choices[0]
+                        if choice.get("finish_reason") is not None:
+                            saw_finish_reason = True
+                        if ttft_ms == 0:
+                            delta = choice.get("delta") or {}
+                            if isinstance(delta, dict):
+                                content = (
+                                    delta.get("content") or delta.get("text")
+                                )
+                                if content:
+                                    ttft_ms = (
+                                        time.perf_counter() - start
+                                    ) * 1000
 
                     # Usage (usually in the last chunk)
                     usage = chunk.get("usage")
-                    if usage:
+                    if isinstance(usage, dict):
                         pt = int(usage.get("prompt_tokens", 0) or 0)
                         ct = int(usage.get("completion_tokens", 0) or 0)
                         tt = int(usage.get("total_tokens", 0) or 0)
 
                 latency_ms = (time.perf_counter() - start) * 1000
-                per_req_tps = ct / (latency_ms / 1000) if latency_ms > 0 and ct > 0 else 0
+                if not saw_choice:
+                    return BenchResult(
+                        False, resp.status, latency_ms,
+                        error="stream contained no completion chunks",
+                    )
+                if not saw_done and not saw_finish_reason:
+                    return BenchResult(
+                        False, resp.status, latency_ms,
+                        ttft_ms=ttft_ms,
+                        tokens_prompt=pt,
+                        tokens_completion=ct,
+                        tokens_total=tt,
+                        error="stream ended before completion",
+                    )
+                per_req_tps = (
+                    ct / (latency_ms / 1000)
+                    if latency_ms > 0 and ct > 0 else 0
+                )
                 return BenchResult(True, resp.status, latency_ms,
                                    ttft_ms=ttft_ms,
                                    tokens_prompt=pt, tokens_completion=ct,
                                    tokens_total=tt,
                                    per_request_tok_per_sec=per_req_tps)
         except asyncio.TimeoutError:
-            return BenchResult(False, 0, (time.perf_counter() - start) * 1000,
+            return BenchResult(False, response_status,
+                               (time.perf_counter() - start) * 1000,
                                ttft_ms=ttft_ms,
+                               tokens_prompt=pt,
+                               tokens_completion=ct,
+                               tokens_total=tt,
                                error="timeout (mid-stream)")
         except Exception as e:
-            return BenchResult(False, 0, (time.perf_counter() - start) * 1000,
+            return BenchResult(False, response_status,
+                               (time.perf_counter() - start) * 1000,
                                ttft_ms=ttft_ms,
+                               tokens_prompt=pt,
+                               tokens_completion=ct,
+                               tokens_total=tt,
                                error=f"stream_error: {e}")
 
 
@@ -395,6 +504,10 @@ async def run_burst(
     - elapsed_s: total wall time across all rounds (avg throughput denominator).
     - peak_req_per_sec: throughput of the fastest single round (peak burst).
     """
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+    if rounds <= 0:
+        raise ValueError("rounds must be positive")
     all_results: List[BenchResult] = []
     total_start = time.perf_counter()
     # per-batch (ok_count, elapsed_s) so we can report a real peak throughput
@@ -431,23 +544,20 @@ async def run_steady(
 
     Returns (results: List[BenchResult], elapsed_s: float).
     """
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+    if duration_s <= 0:
+        raise ValueError("duration_s must be positive")
     results: List[BenchResult] = []
-    stop_at = time.perf_counter() + duration_s
-    counter = 0
-    lock = asyncio.Lock()
+    start = time.perf_counter()
+    stop_at = start + duration_s
 
-    async def worker(wid: int):
-        nonlocal counter
+    async def worker():
         while time.perf_counter() < stop_at:
-            async with lock:
-                counter += 1
             r = await client.chat(prompt, max_tokens=max_tokens)
             results.append(r)
-            # small pacing: avoid ultra-bursting
-            await asyncio.sleep(0.05 if r.success else 0.2)
 
-    start = time.perf_counter()
-    tasks = [asyncio.create_task(worker(i)) for i in range(concurrency)]
+    tasks = [asyncio.create_task(worker()) for _ in range(concurrency)]
     await asyncio.gather(*tasks)
     elapsed_s = time.perf_counter() - start
     return results, elapsed_s
@@ -571,11 +681,13 @@ def generate_report(config: dict, summaries: list) -> str:
     lines.append(f"| Mode | {config['mode']} |")
     lines.append(f"| Date | {config['timestamp']} |")
     lines.append(f"| Concurrency Levels | {config['concurrency']} |")
+    lines.append(f"| Connection Limit | {config['connection_limit']} |")
     if config["mode"] == "burst":
         lines.append(f"| Rounds | {config['rounds']} per level |")
     else:
         lines.append(f"| Duration | {config['duration']}s |")
     lines.append(f"| Max Tokens | {config['max_tokens']} |")
+    lines.append(f"| Token Parameter | `{config['token_param']}` |")
     lines.append(f"| Stream | {'Yes' if config['stream'] else 'No'} |")
     lines.append("")
 
@@ -730,15 +842,18 @@ def save_report(md: str, output_dir: str) -> str:
 
 async def run(args):
     apply_provider(args)
+    levels = parse_concurrency(args.concurrency)
     validate_args(args)
     api_key = resolve_api_key(args)
-    levels = parse_concurrency(args.concurrency)
+    connection_limit = max(levels)
 
     config = {
         "base_url": args.base_url,
         "model": args.model,
+        "token_param": args.token_param,
         "mode": args.mode,
         "concurrency": args.concurrency,
+        "connection_limit": connection_limit,
         "rounds": args.rounds,
         "duration": args.duration,
         "max_tokens": args.max_tokens,
@@ -752,8 +867,10 @@ async def run(args):
     print("=" * 55)
     print(f"  API:      {config['base_url']}")
     print(f"  Model:    {config['model']}")
+    print(f"  Token:    {config['token_param']}")
     print(f"  Mode:     {config['mode']}")
     print(f"  Levels:   {levels}")
+    print(f"  Pool:     {config['connection_limit']} connections")
     if config["mode"] == "burst":
         print(f"  Rounds:   {config['rounds']} per level")
     else:
@@ -769,6 +886,8 @@ async def run(args):
     async with LLMClient(
         config["base_url"], api_key, config["model"],
         timeout_s=args.timeout, stream=config["stream"],
+        max_connections=config["connection_limit"],
+        token_param=config["token_param"],
     ) as client:
 
         await warmup(client, args.warmup, config["max_tokens"])
