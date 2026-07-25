@@ -413,6 +413,8 @@ class LLMClient:
                     # Different providers expose content under different keys:
                     #   OpenAI/Anthropic-compat: choices[0].delta.content
                     #   some gateways:           choices[0].delta.text
+                    #   reasoning models:
+                    #     choices[0].delta.reasoning_content
                     choices = chunk.get("choices", []) or []
                     if (isinstance(choices, list) and choices
                             and isinstance(choices[0], dict)):
@@ -423,10 +425,12 @@ class LLMClient:
                         if ttft_ms == 0:
                             delta = choice.get("delta") or {}
                             if isinstance(delta, dict):
-                                content = (
-                                    delta.get("content") or delta.get("text")
+                                generated = (
+                                    delta.get("content")
+                                    or delta.get("text")
+                                    or delta.get("reasoning_content")
                                 )
-                                if content:
+                                if generated:
                                     ttft_ms = (
                                         time.perf_counter() - start
                                     ) * 1000

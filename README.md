@@ -224,7 +224,7 @@ Provider presets also choose `--token-param`.
 | `avg_latency_ms` | Average latency of successful requests / 平均延迟 |
 | `p50_latency_ms` | Median latency / 中位延迟 |
 | `p95_latency_ms` | 95th percentile latency / P95 延迟 |
-| `ttft_avg_ms` | Average time-to-first-token (stream only) / 首字延迟（仅流式） |
+| `ttft_avg_ms` | Average time to first `content`, `text`, or `reasoning_content` token (stream only) / 首个正文或推理 token 延迟（仅流式） |
 | `req_per_sec` | Average successful requests per second (burst: across all rounds; steady: sustained over the window) / 平均每秒成功请求数 |
 | `peak_req_per_sec` | Burst only: throughput of the fastest single round / 瞬发模式独有：最快一轮的吞吐 |
 | `completion_tok_per_sec` | Total completion tokens / elapsed time / 系统级输出吞吐 |
