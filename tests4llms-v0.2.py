@@ -2,6 +2,8 @@
 """
 Tests4LLMs — LLM API Benchmark (Single Script)
 
+Requires Python >= 3.9 (uses PEP 585 generic aliases like list[str]).
+
 Outputs: result.json (raw details) + report.md (summary with tables)
 
 支持的 API（OpenAI 兼容格式），使用 --provider 快捷切换或手动指定参数：
@@ -70,7 +72,8 @@ import aiohttp
 # 1. CLI — Argument Parsing
 # ═══════════════════════════════════════════════════════════════════
 
-PROVIDER_NAMES = "zhipu / minimax / kimi / stepfun / gemini / openai / anthropic"
+# Providers are declared below in PROVIDERS; the help text is derived from it
+# so the two never drift out of sync.
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--model", default="",
                    help="Model name to benchmark. Optional if --provider is used.")
     g.add_argument("--provider", default="",
-                   help=f"Provider preset: {PROVIDER_NAMES}")
+                   help=f"Provider preset: {', '.join(PROVIDERS)}")
 
     g = p.add_argument_group("Mode")
     g.add_argument("--mode", choices=["burst", "steady"], default="burst",
@@ -182,11 +185,6 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "base_url": "https://api.openai.com/v1",
         "key_env": "OPENAI_API_KEY",
         "model": "gpt-5.4",
-    },
-    "anthropic": {
-        "base_url": "https://api.anthropic.com/v1/",
-        "key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-opus-4-6",
     },
 }
 
@@ -307,57 +305,70 @@ class LLMClient:
 
     async def _stream_request(self, url, payload, start) -> BenchResult:
         payload = {**payload, "stream_options": {"include_usage": True}}
-        async with self.session.post(url, json=payload) as resp:
-            if resp.status // 100 != 2:
+        ttft_ms = 0.0
+        pt = ct = tt = 0
+
+        try:
+            async with self.session.post(url, json=payload) as resp:
+                if resp.status // 100 != 2:
+                    latency_ms = (time.perf_counter() - start) * 1000
+                    text = await resp.text()
+                    return BenchResult(False, resp.status, latency_ms,
+                                       error=text[:2000])
+
+                while True:
+                    line = await resp.content.readline()
+                    if not line:
+                        break
+                    line = line.decode("utf-8", errors="replace").strip()
+                    if line.startswith("data: "):
+                        payload_str = line[6:].strip()
+                    elif line.startswith("data:"):
+                        payload_str = line[5:].strip()
+                    else:
+                        continue
+
+                    if payload_str == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # TTFT: first content-bearing delta.
+                    # Different providers expose content under different keys:
+                    #   OpenAI/Anthropic-compat: choices[0].delta.content
+                    #   some gateways:           choices[0].delta.text
+                    if ttft_ms == 0:
+                        choices = chunk.get("choices", []) or []
+                        if choices:
+                            delta = choices[0].get("delta") or {}
+                            content = delta.get("content") or delta.get("text")
+                            if content:
+                                ttft_ms = (time.perf_counter() - start) * 1000
+
+                    # Usage (usually in the last chunk)
+                    usage = chunk.get("usage")
+                    if usage:
+                        pt = int(usage.get("prompt_tokens", 0) or 0)
+                        ct = int(usage.get("completion_tokens", 0) or 0)
+                        tt = int(usage.get("total_tokens", 0) or 0)
+
                 latency_ms = (time.perf_counter() - start) * 1000
-                text = await resp.text()
-                return BenchResult(False, resp.status, latency_ms,
-                                   error=text[:2000])
-
-            ttft_ms = 0.0
-            pt = ct = tt = 0
-
-            while True:
-                line = await resp.content.readline()
-                if not line:
-                    break
-                line = line.decode("utf-8", errors="replace").strip()
-                if line.startswith("data: "):
-                    payload_str = line[6:].strip()
-                elif line.startswith("data:"):
-                    payload_str = line[5:].strip()
-                else:
-                    continue
-
-                if payload_str == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(payload_str)
-                except json.JSONDecodeError:
-                    continue
-
-                # TTFT: first content-bearing delta
-                if ttft_ms == 0:
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        content = choices[0].get("delta", {}).get("content")
-                        if content:
-                            ttft_ms = (time.perf_counter() - start) * 1000
-
-                # Usage (usually in the last chunk)
-                usage = chunk.get("usage")
-                if usage:
-                    pt = int(usage.get("prompt_tokens", 0) or 0)
-                    ct = int(usage.get("completion_tokens", 0) or 0)
-                    tt = int(usage.get("total_tokens", 0) or 0)
-
-            latency_ms = (time.perf_counter() - start) * 1000
-            per_req_tps = ct / (latency_ms / 1000) if latency_ms > 0 and ct > 0 else 0
-            return BenchResult(True, resp.status, latency_ms,
+                per_req_tps = ct / (latency_ms / 1000) if latency_ms > 0 and ct > 0 else 0
+                return BenchResult(True, resp.status, latency_ms,
+                                   ttft_ms=ttft_ms,
+                                   tokens_prompt=pt, tokens_completion=ct,
+                                   tokens_total=tt,
+                                   per_request_tok_per_sec=per_req_tps)
+        except asyncio.TimeoutError:
+            return BenchResult(False, 0, (time.perf_counter() - start) * 1000,
                                ttft_ms=ttft_ms,
-                               tokens_prompt=pt, tokens_completion=ct,
-                               tokens_total=tt,
-                               per_request_tok_per_sec=per_req_tps)
+                               error="timeout (mid-stream)")
+        except Exception as e:
+            return BenchResult(False, 0, (time.perf_counter() - start) * 1000,
+                               ttft_ms=ttft_ms,
+                               error=f"stream_error: {e}")
 
 
 async def warmup(client: LLMClient, n: int, max_tokens: int):
@@ -376,23 +387,37 @@ async def run_burst(
 ) -> tuple:
     """Burst mode: fire concurrency requests at once, repeat rounds times.
 
-    Returns (results: List[BenchResult], elapsed_s: float).
+    The same fixed prompt is sent to every request so that:
+      - per-request throughput comparisons are apples-to-apples;
+      - providers that cache prompts (OpenAI/Anthropic) can hit cache.
+    Returns (results: List[BenchResult], elapsed_s: float, peak_req_per_sec: float).
+
+    - elapsed_s: total wall time across all rounds (avg throughput denominator).
+    - peak_req_per_sec: throughput of the fastest single round (peak burst).
     """
     all_results: List[BenchResult] = []
     total_start = time.perf_counter()
+    # per-batch (ok_count, elapsed_s) so we can report a real peak throughput
+    # instead of conflating it with average across rounds.
+    batches: List[tuple] = []
 
-    for batch in range(rounds):
+    for _ in range(rounds):
         tasks = [
             asyncio.create_task(
-                client.chat(f"{prompt} (#{i+1})", max_tokens=max_tokens)
+                client.chat(prompt, max_tokens=max_tokens)
             )
-            for i in range(concurrency)
+            for _ in range(concurrency)
         ]
+        batch_start = time.perf_counter()
         batch_results = await asyncio.gather(*tasks)
+        batch_elapsed = time.perf_counter() - batch_start
+        batch_ok = sum(1 for r in batch_results if r.success)
+        batches.append((batch_ok, batch_elapsed))
         all_results.extend(batch_results)
 
     elapsed_s = time.perf_counter() - total_start
-    return all_results, elapsed_s
+    peak = max((ok / t for ok, t in batches if t > 0), default=0.0)
+    return all_results, elapsed_s, peak
 
 
 async def run_steady(
@@ -416,10 +441,7 @@ async def run_steady(
         while time.perf_counter() < stop_at:
             async with lock:
                 counter += 1
-                req_id = counter
-            r = await client.chat(
-                f"{prompt} (#{req_id})", max_tokens=max_tokens
-            )
+            r = await client.chat(prompt, max_tokens=max_tokens)
             results.append(r)
             # small pacing: avoid ultra-bursting
             await asyncio.sleep(0.05 if r.success else 0.2)
@@ -453,8 +475,17 @@ def summarize_level(
     results: List[BenchResult],
     concurrency: int,
     elapsed_s: float,
+    mode: str = "burst",
+    peak_req_per_sec: float = 0.0,
 ) -> Dict[str, Any]:
-    """Compute all metrics for a single concurrency level."""
+    """Compute all metrics for a single concurrency level.
+
+    Throughput semantics:
+      - burst:  `req_per_sec` is average across all rounds (total ok / total
+                wall time). `peak_req_per_sec` is the fastest single round.
+      - steady: `req_per_sec` is sustained throughput over the duration window.
+                `peak_req_per_sec` is left at 0 (n/a).
+    """
     ok = [r for r in results if r.success]
     fail = [r for r in results if not r.success]
     total = len(results)
@@ -490,6 +521,9 @@ def summarize_level(
         summary["ttft_avg_ms"] = mean(ttfts)
 
     summary["req_per_sec"] = len(ok) / elapsed_s if elapsed_s > 0 else 0
+    # Burst-only: peak throughput of the fastest round (see run_burst).
+    if mode == "burst" and peak_req_per_sec > 0:
+        summary["peak_req_per_sec"] = peak_req_per_sec
     summary["completion_tok_per_sec"] = (
         sum(r.tokens_completion for r in ok) / elapsed_s
         if elapsed_s > 0 else 0
@@ -547,19 +581,20 @@ def generate_report(config: dict, summaries: list) -> str:
 
     # ── Overview Table ──
     has_ttft = any("ttft_avg_ms" in s for s in summaries)
+    has_peak = config["mode"] == "burst" and any("peak_req_per_sec" in s for s in summaries)
     lines.append("## Overview")
     lines.append("")
 
+    cols = ["C", "Success%", "Avg Lat (ms)", "P50 (ms)", "P95 (ms)"]
     if has_ttft:
-        lines.append("| C | Success% | Avg Lat (ms) | P50 (ms) | P95 (ms) |"
-                     " TTFT (ms) | req/s | comp tok/s | per-req tok/s |")
-        lines.append("|---|----------|-------------|----------|----------|"
-                     "-----------|-------|------------|---------------|")
-    else:
-        lines.append("| C | Success% | Avg Lat (ms) | P50 (ms) | P95 (ms) |"
-                     " req/s | comp tok/s | per-req tok/s |")
-        lines.append("|---|----------|-------------|----------|----------|"
-                     "-------|------------|---------------|")
+        cols.append("TTFT (ms)")
+    cols.append("req/s (avg)")
+    if has_peak:
+        cols.append("req/s (peak)")
+    cols += ["comp tok/s", "per-req tok/s"]
+
+    lines.append("| " + " | ".join(cols) + " |")
+    lines.append("|" + "|".join("---" for _ in cols) + "|")
 
     for s in summaries:
         c = s["concurrency"]
@@ -572,20 +607,20 @@ def generate_report(config: dict, summaries: list) -> str:
         else:
             avg_l = p50 = p95 = "-"
 
+        cells = [str(c), sr, avg_l, p50, p95]
+        if has_ttft:
+            cells.append(f"{s['ttft_avg_ms']:.0f}" if "ttft_avg_ms" in s else "-")
         rps = f"{s['req_per_sec']:.1f}" if s.get("req_per_sec") else "-"
+        cells.append(rps)
+        if has_peak:
+            cells.append(f"{s['peak_req_per_sec']:.1f}"
+                         if "peak_req_per_sec" in s else "-")
         ctps = (f"{s['completion_tok_per_sec']:.1f}"
                 if s.get("completion_tok_per_sec") else "-")
         prtps = (f"{s['per_request_tok_per_sec']:.1f}"
                  if s.get("per_request_tok_per_sec") else "-")
-
-        if has_ttft:
-            ttft = f"{s['ttft_avg_ms']:.0f}" if "ttft_avg_ms" in s else "-"
-            row = (f"| {c} | {sr} | {avg_l} | {p50} | {p95} |"
-                   f" {ttft} | {rps} | {ctps} | {prtps} |")
-        else:
-            row = (f"| {c} | {sr} | {avg_l} | {p50} | {p95} |"
-                   f" {rps} | {ctps} | {prtps} |")
-        lines.append(row)
+        cells += [ctps, prtps]
+        lines.append("| " + " | ".join(cells) + " |")
 
     lines.append("")
 
@@ -615,15 +650,20 @@ def generate_conclusion(summaries: list) -> str:
             f"(avg {best['avg_latency_ms']:.0f}ms)"
         )
 
-    # Best throughput level
+    # Best throughput level. In burst mode prefer peak_req_per_sec (the fastest
+    # single round); in steady mode fall back to the sustained req/s.
     with_tps = [s for s in ok if s.get("req_per_sec", 0) > 0]
     if with_tps:
-        best = max(with_tps, key=lambda s: s["req_per_sec"])
+        def _throughput_key(s):
+            return s.get("peak_req_per_sec") or s.get("req_per_sec", 0)
+        best = max(with_tps, key=_throughput_key)
+        tps_label = "peak" if "peak_req_per_sec" in best else "avg"
+        tps_val = _throughput_key(best)
         comp_tok = (f", {best['completion_tok_per_sec']:.1f} comp tok/s"
                     if best.get("completion_tok_per_sec") else "")
         lines.append(
             f"- Best throughput: concurrency={best['concurrency']} "
-            f"({best['req_per_sec']:.1f} req/s{comp_tok})"
+            f"({tps_val:.1f} req/s {tps_label}{comp_tok})"
         )
 
     # Scaling ratio
@@ -734,8 +774,9 @@ async def run(args):
         await warmup(client, args.warmup, config["max_tokens"])
 
         for lvl in levels:
+            peak = 0.0
             if config["mode"] == "burst":
-                results, elapsed = await run_burst(
+                results, elapsed, peak = await run_burst(
                     client, lvl, args.rounds,
                     config["max_tokens"], config["prompt"],
                 )
@@ -745,7 +786,9 @@ async def run(args):
                     config["max_tokens"], config["prompt"],
                 )
 
-            s = summarize_level(list(results), lvl, elapsed)
+            s = summarize_level(list(results), lvl, elapsed,
+                                mode=config["mode"],
+                                peak_req_per_sec=peak)
             ok_count = s["successful"]
             total_count = s["total"]
 

@@ -6,6 +6,10 @@ LLM API benchmark tool for OpenAI-compatible endpoints.
 Single script, zero config files, all parameters via CLI.
 单脚本、零配置文件，所有参数通过命令行传入。
 
+**Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
+
+> `legacy/tests4llms-v0.1.py` is **deprecated** and kept for reference only — it has hardcoded provider config, an unused `keepalive_connections` param, and prints part of the API key. Use `tests4llms-v0.2.py`.
+
 ---
 
 ## Quick Start / 快速开始
@@ -103,7 +107,8 @@ Fire `concurrency` requests **simultaneously**, repeat `--rounds` times.
 | `p50_latency_ms` | Median latency / 中位延迟 |
 | `p95_latency_ms` | 95th percentile latency / P95 延迟 |
 | `ttft_avg_ms` | Average time-to-first-token (stream only) / 首字延迟（仅流式） |
-| `req_per_sec` | Successful requests per second / 每秒成功请求数 |
+| `req_per_sec` | Average successful requests per second (burst: across all rounds; steady: sustained over the window) / 平均每秒成功请求数 |
+| `peak_req_per_sec` | Burst only: throughput of the fastest single round / 瞬发模式独有：最快一轮的吞吐 |
 | `completion_tok_per_sec` | Total completion tokens / elapsed time / 系统级输出吞吐 |
 | `per_request_tok_per_sec` | Per-request: completion_tokens / latency / 单请求输出吞吐 |
 
@@ -137,11 +142,25 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | StepFun / 阶跃星辰 | `stepfun` | `https://api.stepfun.com/v1` | `STEP_API_KEY` | `step-3.5-flash` |
 | Google Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` | `gemini-3.1-pro-preview` |
 | OpenAI | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.4` |
-| Anthropic | `anthropic` | `https://api.anthropic.com/v1/` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+
+> **Note on Anthropic:** the native Anthropic API is *not* OpenAI-compatible (different auth header, no `/chat/completions`), so it is not a built-in preset. Point `--base-url` at Anthropic's OpenAI-compatible proxy if you need it.
 
 ---
 
 ## Changelog / 更新日志
+
+### v0.2.1 (`tests4llms-v0.2.py`) — fixes
+
+| EN | 中文 |
+|----|------|
+| Removed Anthropic preset (native API isn't OpenAI-compatible) | 移除 Anthropic 预设（原生 API 非 OpenAI 兼容） |
+| Burst mode now reports both `req_per_sec` (avg) and `peak_req_per_sec` (fastest round) | burst 模式新增 `peak_req_per_sec`（最快一轮峰值） |
+| Streaming TTFT now detects `delta.content` and `delta.text` across providers | 流式 TTFT 兼容 `delta.content` / `delta.text` 多种格式 |
+| Mid-stream timeout/error now produces a proper `BenchResult` instead of crashing the batch | 流式中途超时/异常不再让整批崩溃，生成失败结果 |
+| Same fixed prompt for every request (fair comparison + prompt-cache friendly) | 每个请求使用相同固定 prompt（公平对比，利于命中 prompt cache） |
+| CI no longer swallows failures (`|| true` removed); adds compile-check + smoke test | CI 不再用 `|| true` 掩盖失败；新增编译检查与冒烟测试 |
+| `requirements.txt` added; Python >= 3.9 declared | 新增 `requirements.txt`；声明 Python >= 3.9 |
+| v0.1 archived under `legacy/` with deprecation notice | v0.1 归档至 `legacy/` 并标注废弃 |
 
 ### v0.2 (`tests4llms-v0.2.py`)
 
@@ -155,7 +174,7 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | Streaming + TTFT: `--stream` enables SSE parsing | 流式 + 首字延迟：`--stream` 启用 SSE 解析 |
 | Structured JSON (`result.json`): config, summaries, raw data | 结构化 JSON：配置、汇总、原始数据 |
 
-### v0.1 (`tests4llms-v0.1.py`)
+### v0.1 (`legacy/tests4llms-v0.1.py`) — deprecated
 
 | EN | 中文 |
 |----|------|
