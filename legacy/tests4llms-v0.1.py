@@ -3,6 +3,16 @@
 """
 LLM Bench (Async, connection pooling)
 
+[DEPRECATED — v0.1] This file is preserved for historical reference only.
+Use tests4llms-v0.2.py instead. v0.1 has known issues that will NOT be fixed:
+  - Provider config hardcoded in source; --provider flag does not exist.
+  - LLMClient.__init__ accepts keepalive_connections but never applies it.
+  - Prints the first 12 chars of the API key (info leak).
+  - top_errors() can split UTF-8 multibyte chars mid-sequence.
+Do not run this in production benchmarks.
+
+LLM Bench (Async, connection pooling)
+
 支持的 7 家 API（OpenAI 兼容格式），取消对应注释并修改下方 BASE_URL / API_KEY_ENV / DEFAULT_MODEL 即可切换：
 
 ## 1. 智谱 Zhipu AI
