@@ -7,6 +7,10 @@ Single script, zero config files, all parameters via CLI.
 单脚本、零配置文件，所有参数通过命令行传入。
 
 **Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+
+
+**Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
 
 > `legacy/tests4llms-v0.1.py` is **deprecated** and kept for reference only — it has hardcoded provider config, an unused `keepalive_connections` param, and prints part of the API key. Use `tests4llms-v0.2.py`.
 
@@ -149,7 +153,11 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 
 ## Changelog / 更新日志
 
-### v0.2.1 (`tests4llms-v0.2.py`) — fixes
+> Full history: [CHANGELOG.md](CHANGELOG.md)
+
+### v0.2.1 (`tests4llms-v0.2.py`) — current / 当前版本
+
+The "repair" release: correctness, streaming robustness, real CI, docs.
 
 | EN | 中文 |
 |----|------|
@@ -162,26 +170,8 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | `requirements.txt` added; Python >= 3.9 declared | 新增 `requirements.txt`；声明 Python >= 3.9 |
 | v0.1 archived under `legacy/` with deprecation notice | v0.1 归档至 `legacy/` 并标注废弃 |
 
-### v0.2 (`tests4llms-v0.2.py`)
+Earlier versions (v0.2, v0.1) are documented in [CHANGELOG.md](CHANGELOG.md).
 
-| EN | 中文 |
-|----|------|
-| 6 logical blocks: CLI, Provider Profile, Runner, Metrics, Reporter, IO | 6 个逻辑块：CLI、供应商预设、执行器、指标、报告器、IO |
-| Dual mode: burst (instantaneous) + steady (sustained throughput) | 双模式：burst 瞬发 + steady 稳态吞吐 |
-| `--provider` preset: one flag to set base-url / key-env / model | `--provider` 预设：一个参数搞定三件配置 |
-| Rich metrics: latency p50/p95, TTFT, req/s, completion tok/s, per-req tok/s | 完整指标：延迟 p50/p95、TTFT、req/s、系统吞吐、单请求吞吐 |
-| Simplified report.md: Configuration + Overview Table + Conclusion | 简化报告：配置 + 总览表 + 结论（自动识别最佳档位和拐点） |
-| Streaming + TTFT: `--stream` enables SSE parsing | 流式 + 首字延迟：`--stream` 启用 SSE 解析 |
-| Structured JSON (`result.json`): config, summaries, raw data | 结构化 JSON：配置、汇总、原始数据 |
-
-### v0.1 (`legacy/tests4llms-v0.1.py`) — deprecated
-
-| EN | 中文 |
-|----|------|
-| Initial version: async benchmark with connection pooling | 初始版本：asyncio + 连接池压测 |
-| Latency test, concurrency sweep, RPM/TPM window test | 延迟测试、并发扫描、RPM/TPM 窗口测试 |
-| Provider config hardcoded in source | 供应商配置硬编码在源码中 |
-| JSON output only | 仅 JSON 输出 |
 
 ---
 
