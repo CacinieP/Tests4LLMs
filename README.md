@@ -54,6 +54,69 @@ python tests4llms-v0.2.py \
 
 ---
 
+## Third-party Relays / 第三方中转
+
+For an OpenAI-compatible relay, use manual configuration instead of a
+provider preset. The script sends `POST <base-url>/chat/completions` with
+`Authorization: Bearer <key>`.
+
+测试 OpenAI 兼容的第三方中转时，请使用手动参数。脚本会请求
+`POST <base-url>/chat/completions`，鉴权格式为
+`Authorization: Bearer <key>`。
+
+```bash
+# Paste the key when prompted, then press Enter. Input is hidden.
+# 粘贴密钥后按回车，输入内容不会显示。
+read -rs RELAY_API_KEY
+export RELAY_API_KEY
+
+python tests4llms-v0.2.py \
+  --base-url https://relay.example.com/v1 \
+  --api-key-env RELAY_API_KEY \
+  --model relay-model-id \
+  --token-param max_tokens \
+  --concurrency 1,3,5 \
+  --rounds 1 \
+  --max-tokens 100 \
+  --output-dir results/relay
+```
+
+Parameter mapping / 参数对应关系：
+
+| Relay documentation / 中转文档 | Tests4LLMs parameter / 参数 |
+|----------------------------------|-----------------------------|
+| Base URL such as `https://relay.example.com/v1` | `--base-url https://relay.example.com/v1` |
+| Full endpoint such as `https://relay.example.com/v1/chat/completions` | Remove `/chat/completions`; use `--base-url https://relay.example.com/v1` / 去掉末尾路径 |
+| API key / 密钥 | Put it in an environment variable, then use `--api-key-env RELAY_API_KEY` / 写入环境变量 |
+| Model ID / 模型 ID | Use the relay's exact model name with `--model` / 使用中转实际模型名 |
+| Output-token field / 输出 token 字段 | Start with `--token-param max_tokens`; switch to `max_completion_tokens` if required |
+
+If the relay exposes a models endpoint, list the available model IDs first:
+如果中转提供模型列表接口，可以先查询实际模型 ID：
+
+```bash
+export RELAY_BASE_URL="https://relay.example.com/v1"
+curl -sS "$RELAY_BASE_URL/models" \
+  -H "Authorization: Bearer $RELAY_API_KEY"
+```
+
+Useful troubleshooting / 常见排查：
+
+- `404 model_invalid`: the relay does not recognize the `--model` value;
+  query `/models` or check its documentation. / 模型名不正确，查询模型列表。
+- `400` mentioning `max_tokens`: retry with
+  `--token-param max_completion_tokens`. / 切换输出 token 字段。
+- `429 rate_limited`: reduce `--concurrency`, `--rounds`, or steady-mode
+  duration. Start with `1,3,5` and one round. / 降低并发、轮次或测试时长。
+- Add `--stream` only when the relay supports SSE streaming and
+  `stream_options.include_usage`; otherwise omit it. / 中转支持流式和 usage
+  统计时再启用。
+- Relays requiring `x-api-key`, custom signatures, or other non-Bearer
+  headers need a code change; the current CLI does not configure arbitrary
+  headers. / 当前版本不支持自定义鉴权头。
+
+---
+
 ## Test Modes / 测试模式
 
 ### Burst / 瞬发模式 (`--mode burst`, default)
