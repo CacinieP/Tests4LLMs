@@ -1,39 +1,88 @@
 # Tests4LLMs
 
-LLM API benchmark tool for OpenAI-compatible endpoints.
-面向 OpenAI 兼容 API 的 LLM 压测工具。
+[![CI](https://github.com/CacinieP/Tests4LLMs/actions/workflows/ci.yml/badge.svg)](https://github.com/CacinieP/Tests4LLMs/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-%3E%3D3.9-blue)
 
-Single script, zero config files, all parameters via CLI.
-单脚本、零配置文件，所有参数通过命令行传入。
+A lightweight command-line benchmark for OpenAI-compatible LLM APIs.
+面向 OpenAI 兼容 LLM API 的轻量级命令行压测工具。
 
-**Requires Python >= 3.9.** `aiohttp` is the only runtime dependency (`pip install -r requirements.txt`).
-See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+`tests4llms-v0.2.py` runs burst or sustained-load tests, measures latency,
+throughput and streaming TTFT, then writes machine-readable JSON and a compact
+Markdown report. The benchmark itself is a single script; all configuration is
+provided through CLI arguments.
 
-> `legacy/tests4llms-v0.1.py` is **deprecated** and kept for reference only — it has hardcoded provider config and an unused `keepalive_connections` parameter. Use `tests4llms-v0.2.py`.
+`tests4llms-v0.2.py` 支持瞬发与稳态压测，统计延迟、吞吐和流式首字延迟，
+并输出 JSON 原始数据与 Markdown 报告。压测程序为单脚本，全部配置通过命令行传入。
+
+> [!CAUTION]
+> This tool sends real API requests that may incur charges or trigger rate
+> limits. Start with low concurrency. / 本工具会发起真实 API 请求，可能产生费用或触发限速，请从低并发开始。
+
+## Features / 特性
+
+- Burst and steady test modes / 瞬发与稳态两种压测模式
+- Concurrency sweeps with an automatically sized connection pool / 多档并发与自动连接池
+- Non-stream and SSE streaming requests with TTFT / 普通与流式请求、首字延迟
+- Success rate, p50/p95 latency, req/s and token throughput / 成功率、延迟与吞吐指标
+- Built-in provider presets plus manual relay configuration / 内置供应商预设与第三方中转配置
+- `result.json` raw data and `report.md` summary / JSON 原始数据与 Markdown 汇总
+- Environment-variable API keys; credentials are not written to reports / 密钥不写入报告
+
+---
+
+## Requirements and Installation / 环境与安装
+
+- Python 3.9 or newer
+- `aiohttp>=3.9`
+
+```bash
+git clone https://github.com/CacinieP/Tests4LLMs.git
+cd Tests4LLMs
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Using a virtual environment is recommended but not required.
+建议使用虚拟环境，但不是强制要求。
 
 ---
 
 ## Quick Start / 快速开始
 
+### Provider preset / 供应商预设
+
+Each preset fills in the base URL, API-key environment variable, default model,
+and compatible output-token parameter.
+预设会自动填写 API 地址、密钥环境变量、默认模型和输出 token 参数。
+
 ```bash
-pip install aiohttp
+# Paste the key after the prompt; input is hidden (bash/zsh).
+# 提示后粘贴密钥，输入内容不可见（bash/zsh）。
+printf "STEP_API_KEY: "
+read -rs STEP_API_KEY
+printf "\n"
+export STEP_API_KEY
 
-# Provider preset (recommended)
 python tests4llms-v0.2.py \
-  --provider zhipu \
-  --concurrency 1,5,10,20 \
-  --rounds 3
+  --provider stepfun \
+  --concurrency 1,3,5 \
+  --rounds 1
+```
 
-# Manual config
+### Manual endpoint / 手动配置
+
+```bash
 python tests4llms-v0.2.py \
   --base-url https://open.bigmodel.cn/api/paas/v4 \
   --api-key-env ZHIPU_API_KEY \
   --model glm-5 \
-  --concurrency 1,5,10,20 \
-  --rounds 3
+  --token-param max_tokens \
+  --concurrency 1,3,5
 ```
 
-Steady mode — sustained throughput test / 稳态吞吐测试：
+### Steady mode / 稳态模式
 
 ```bash
 python tests4llms-v0.2.py \
@@ -43,7 +92,7 @@ python tests4llms-v0.2.py \
   --duration 30
 ```
 
-Streaming (with TTFT measurement) / 流式模式（含首字延迟测量）：
+### Streaming and TTFT / 流式与首字延迟
 
 ```bash
 python tests4llms-v0.2.py \
@@ -56,18 +105,21 @@ python tests4llms-v0.2.py \
 
 ## Third-party Relays / 第三方中转
 
-For an OpenAI-compatible relay, use manual configuration instead of a
-provider preset. The script sends `POST <base-url>/chat/completions` with
-`Authorization: Bearer <key>`.
+Use manual configuration for an OpenAI-compatible relay. The relay must accept:
 
-测试 OpenAI 兼容的第三方中转时，请使用手动参数。脚本会请求
-`POST <base-url>/chat/completions`，鉴权格式为
-`Authorization: Bearer <key>`。
+- `POST <base-url>/chat/completions`
+- `Authorization: Bearer <key>`
+- OpenAI Chat Completions-style request and response JSON
+
+测试第三方中转时请使用手动参数。中转必须兼容 OpenAI Chat Completions
+请求与响应格式，并支持 Bearer 鉴权。
 
 ```bash
-# Paste the key when prompted, then press Enter. Input is hidden.
-# 粘贴密钥后按回车，输入内容不会显示。
+# Paste the key, then press Enter. Input is hidden (bash/zsh).
+# 粘贴密钥后按回车，输入内容不可见（bash/zsh）。
+printf "RELAY_API_KEY: "
 read -rs RELAY_API_KEY
+printf "\n"
 export RELAY_API_KEY
 
 python tests4llms-v0.2.py \
@@ -91,8 +143,8 @@ Parameter mapping / 参数对应关系：
 | Model ID / 模型 ID | Use the relay's exact model name with `--model` / 使用中转实际模型名 |
 | Output-token field / 输出 token 字段 | Start with `--token-param max_tokens`; switch to `max_completion_tokens` if required |
 
-If the relay exposes a models endpoint, list the available model IDs first:
-如果中转提供模型列表接口，可以先查询实际模型 ID：
+If available, query the relay's models endpoint before testing:
+如果中转提供模型列表接口，建议先查询实际模型 ID：
 
 ```bash
 export RELAY_BASE_URL="https://relay.example.com/v1"
@@ -113,7 +165,7 @@ Useful troubleshooting / 常见排查：
   统计时再启用。
 - Relays requiring `x-api-key`, custom signatures, or other non-Bearer
   headers need a code change; the current CLI does not configure arbitrary
-  headers. / 当前版本不支持自定义鉴权头。
+  headers. / 当前版本仅支持 Bearer 鉴权，不支持自定义请求头。
 
 ---
 
@@ -141,24 +193,25 @@ Fire `concurrency` requests **simultaneously**, repeat `--rounds` times.
 
 | Parameter | Default | Description / 说明 |
 |-----------|---------|---------------------|
-| `--provider` | | Provider preset name (see table below) / 供应商预设名（见下表） |
-| `--base-url` | (required*) | API base URL, OpenAI-compatible / API 地址 |
-| `--api-key` | | API key string / API 密钥明文 |
-| `--api-key-env` | | Env var name holding the API key / 环境变量名 |
+| `--provider` | — | Provider preset name (see table below) / 供应商预设名（见下表） |
+| `--base-url` | required* | API prefix before `/chat/completions` / `/chat/completions` 之前的 API 地址 |
+| `--api-key` | — | Plaintext API key; `--api-key-env` is safer / 明文密钥，不建议使用 |
+| `--api-key-env` | — | Environment variable containing the API key / 保存密钥的环境变量名 |
 | `--model` | (required*) | Model name / 模型名称 |
 | `--mode` | `burst` | `burst` or `steady` / 瞬发或稳态模式 |
 | `--concurrency` | `1,5,10,20` | Comma-separated concurrency levels / 并发级别 |
-| `--rounds` | `1` | Burst: repeat count per level / 瞬发模式每级重复次数 |
-| `--duration` | `30` | Steady: test duration in seconds / 稳态模式时长（秒） |
+| `--rounds` | `1` | Burst: repeat count per level; ignored in steady mode / 瞬发模式每级轮次 |
+| `--duration` | `30` | Steady: seconds per level; ignored in burst mode / 稳态模式每级时长 |
 | `--max-tokens` | `100` | Max tokens per request / 单次最大 token 数 |
-| `--token-param` | provider-specific | Output-token request field: `max_tokens` or `max_completion_tokens` / 输出 token 请求字段 |
+| `--token-param` | preset-specific* | `max_tokens` or `max_completion_tokens`; manual default is `max_tokens` / 输出 token 字段 |
 | `--stream` | off | Enable streaming, measures TTFT / 流式 + 首字延迟 |
 | `--prompt` | `Count from 1 to 10.` | Test prompt / 测试提示词 |
 | `--timeout` | `120` | Request timeout in seconds / 超时（秒） |
 | `--warmup` | `2` | Warmup requests / 预热请求数 |
-| `--output-dir` | `.` | Output directory / 输出目录 |
+| `--output-dir` | `.` | Directory for `result.json` and `report.md` / 结果目录 |
 
-\* Required unless `--provider` is used.
+\* `--base-url` and `--model` are required unless `--provider` supplies them.
+Provider presets also choose `--token-param`.
 
 ---
 
@@ -209,36 +262,64 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | OpenAI | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.4` |
 | Anthropic | `anthropic` | `https://api.anthropic.com/v1/` | `ANTHROPIC_API_KEY` | `claude-opus-5` |
 
-> **Anthropic:** this preset uses Anthropic's official OpenAI SDK compatibility layer. It is suitable for testing and evaluation, including streaming and usage reporting.
+Default models may change over time. Override a preset with `--model` without
+editing the script. / 默认模型可能随时间变化，可直接用 `--model` 覆盖。
 
-Provider presets also choose a compatible output-token field. OpenAI uses
+The Anthropic preset uses its
+[official OpenAI SDK compatibility layer](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk).
+Provider presets also choose a compatible output-token field: OpenAI uses
 `max_completion_tokens`; the other presets use `max_tokens`. Manual endpoints
-default to `max_tokens` and can override it with `--token-param`.
+default to `max_tokens`.
 
 ---
+
+## Benchmarking Notes / 压测说明
+
+- The benchmark measures the complete request path: local network, relay,
+  provider queue and model generation. A relay result is not a model-only
+  measurement. / 结果包含本地网络、中转、供应商排队和模型生成的完整链路。
+- Burst results are more stable with multiple rounds; steady results are more
+  representative with a longer duration. Increase load gradually. /
+  多轮瞬发和更长稳态测试更有代表性，请逐步增加负载。
+- The same prompt is reused for fair comparison and cache friendliness.
+  Provider-side prompt caching may affect latency and billing. /
+  所有请求使用同一提示词，供应商缓存可能影响延迟与计费。
+- Successful HTTP transport is not enough: empty or truncated completions are
+  counted as failures. / 空响应和截断响应会被计为失败。
+- Do not commit API keys or paste them into `--api-key` in shared shell
+  sessions. Prefer `--api-key-env`. / 请勿提交密钥，优先使用环境变量。
+
+---
+
+## Development / 开发
+
+The test suite uses a local `aiohttp` server and does not call paid APIs.
+测试套件使用本地模拟服务，不会调用付费 API。
+
+```bash
+python -m py_compile \
+  tests4llms-v0.2.py \
+  legacy/tests4llms-v0.1.py \
+  tests/test_tests4llms.py
+
+python -m unittest discover -s tests -v
+```
+
+CI also runs CLI smoke checks and flake8 fatal-error checks.
+CI 还会执行 CLI 冒烟测试与 flake8 严重错误检查。
+
+---
+
+## Legacy Version / 旧版
+
+`legacy/tests4llms-v0.1.py` is deprecated and retained only for historical
+reference. It has hardcoded provider configuration and should not be used for
+new benchmarks. / v0.1 仅作历史参考，新压测请使用 `tests4llms-v0.2.py`。
 
 ## Changelog / 更新日志
 
-> Full history: [CHANGELOG.md](CHANGELOG.md)
-
-### Unreleased (`tests4llms-v0.2.py`) — current / 当前版本
-
-Correctness and coverage follow-up to v0.2.1.
-
-| EN | 中文 |
-|----|------|
-| Empty or truncated streams are failures; `[DONE]` ends a request immediately | 空流或截断流会判定失败；收到 `[DONE]` 立即结束请求 |
-| Invalid concurrency, duration, rounds, timeout, and token limits fail fast | 非法并发、时长、轮次、超时和 token 上限会立即报错 |
-| The connection pool automatically matches the highest requested concurrency | 连接池会自动匹配最高并发级别 |
-| Provider-specific output-token parameters, including OpenAI `max_completion_tokens` | 按供应商选择输出 token 参数，包括 OpenAI 的 `max_completion_tokens` |
-| Restored Anthropic through its official OpenAI SDK compatibility layer | 通过 Anthropic 官方 OpenAI SDK 兼容层恢复 Anthropic 预设 |
-| Behavioral tests now cover CLI validation, streaming, payloads, and pool sizing | 新增行为测试，覆盖参数校验、流式响应、请求载荷和连接池 |
-| Legacy v0.1 no longer logs any API-key prefix | 旧版 v0.1 不再输出 API 密钥前缀 |
-
-Earlier versions are documented in [CHANGELOG.md](CHANGELOG.md).
-
-
----
+See [CHANGELOG.md](CHANGELOG.md) for release history and unreleased changes.
+版本历史与尚未发布的改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License / 许可证
 
