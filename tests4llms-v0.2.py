@@ -56,9 +56,11 @@ Usage:
 
 import argparse
 import asyncio
+import html
 import json
 import math
 import os
+import platform
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -131,6 +133,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Max tokens per request (default: 100)")
     g.add_argument("--stream", action="store_true",
                    help="Enable streaming (measures TTFT)")
+    g.add_argument("--no-stream-usage", dest="stream_usage", action="store_false",
+                   help="Omit stream_options for endpoints that reject it. "
+                        "Token rates need usage returned by the server.")
     g.add_argument("--prompt", default="Count from 1 to 10.",
                    help="Test prompt (default: 'Count from 1 to 10.')")
 
@@ -138,7 +143,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--timeout", type=float, default=120.0,
                    help="Request timeout in seconds (default: 120)")
     g.add_argument("--warmup", type=int, default=2,
-                   help="Warmup requests before benchmark (default: 2)")
+                   help="Requests using the benchmark prompt and token limit, "
+                        "once before all levels (default: 2; 0 disables)")
     g.add_argument("--output-dir", default=".",
                    help="Directory for result.json & report.md (default: .)")
 
@@ -277,10 +283,10 @@ class BenchResult:
     status_code: int
     latency_ms: float
     ttft_ms: float = 0.0
-    tokens_prompt: int = 0
-    tokens_completion: int = 0
-    tokens_total: int = 0
-    per_request_tok_per_sec: float = 0.0
+    tokens_prompt: Optional[int] = None
+    tokens_completion: Optional[int] = None
+    tokens_total: Optional[int] = None
+    per_request_tok_per_sec: Optional[float] = None
     error: Optional[str] = None
 
 
@@ -290,7 +296,7 @@ class LLMClient:
     def __init__(self, base_url: str, api_key: str, model: str,
                  timeout_s: float = 120.0, stream: bool = False,
                  max_connections: int = 256,
-                 token_param: str = "max_tokens"):
+                 token_param: str = "max_tokens", stream_usage: bool = True):
         if max_connections <= 0:
             raise ValueError("max_connections must be positive")
         if token_param not in {"max_tokens", "max_completion_tokens"}:
@@ -299,6 +305,7 @@ class LLMClient:
         self.api_key = api_key
         self.model = model
         self.stream = stream
+        self.stream_usage = stream_usage
         self.token_param = token_param
         self.timeout = aiohttp.ClientTimeout(total=timeout_s)
         self.connector = aiohttp.TCPConnector(
@@ -345,12 +352,12 @@ class LLMClient:
 
     async def _non_stream_request(self, url, payload, start) -> BenchResult:
         async with self.session.post(url, json=payload) as resp:
+            text = await resp.text()
             latency_ms = (time.perf_counter() - start) * 1000
             if resp.status // 100 != 2:
-                text = await resp.text()
                 return BenchResult(False, resp.status, latency_ms,
                                    error=text[:2000])
-            data = json.loads(await resp.text())
+            data = json.loads(text)
             choices = data.get("choices") if isinstance(data, dict) else None
             if not isinstance(choices, list) or not choices:
                 return BenchResult(
@@ -360,19 +367,26 @@ class LLMClient:
             usage = data.get("usage") or {}
             if not isinstance(usage, dict):
                 usage = {}
-            pt = int(usage.get("prompt_tokens", 0) or 0)
-            ct = int(usage.get("completion_tokens", 0) or 0)
-            tt = int(usage.get("total_tokens", 0) or 0)
-            per_req_tps = ct / (latency_ms / 1000) if latency_ms > 0 else 0
+            pt = usage.get("prompt_tokens")
+            ct = usage.get("completion_tokens")
+            tt = usage.get("total_tokens")
+            pt = int(pt) if pt is not None else None
+            ct = int(ct) if ct is not None else None
+            tt = int(tt) if tt is not None else None
+            per_req_tps = (
+                ct / (latency_ms / 1000)
+                if ct is not None and latency_ms > 0 else None
+            )
             return BenchResult(True, resp.status, latency_ms,
                                tokens_prompt=pt, tokens_completion=ct,
                                tokens_total=tt,
                                per_request_tok_per_sec=per_req_tps)
 
     async def _stream_request(self, url, payload, start) -> BenchResult:
-        payload = {**payload, "stream_options": {"include_usage": True}}
+        if self.stream_usage:
+            payload = {**payload, "stream_options": {"include_usage": True}}
         ttft_ms = 0.0
-        pt = ct = tt = 0
+        pt = ct = tt = None
         response_status = 0
         saw_choice = False
         saw_finish_reason = False
@@ -382,8 +396,8 @@ class LLMClient:
             async with self.session.post(url, json=payload) as resp:
                 response_status = resp.status
                 if resp.status // 100 != 2:
-                    latency_ms = (time.perf_counter() - start) * 1000
                     text = await resp.text()
+                    latency_ms = (time.perf_counter() - start) * 1000
                     return BenchResult(False, resp.status, latency_ms,
                                        error=text[:2000])
 
@@ -438,9 +452,14 @@ class LLMClient:
                     # Usage (usually in the last chunk)
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
-                        pt = int(usage.get("prompt_tokens", 0) or 0)
-                        ct = int(usage.get("completion_tokens", 0) or 0)
-                        tt = int(usage.get("total_tokens", 0) or 0)
+                        # Some compatible servers send partial usage updates.
+                        # Keep known counts if a later update omits a field.
+                        if usage.get("prompt_tokens") is not None:
+                            pt = int(usage["prompt_tokens"])
+                        if usage.get("completion_tokens") is not None:
+                            ct = int(usage["completion_tokens"])
+                        if usage.get("total_tokens") is not None:
+                            tt = int(usage["total_tokens"])
 
                 latency_ms = (time.perf_counter() - start) * 1000
                 if not saw_choice:
@@ -459,7 +478,7 @@ class LLMClient:
                     )
                 per_req_tps = (
                     ct / (latency_ms / 1000)
-                    if latency_ms > 0 and ct > 0 else 0
+                    if latency_ms > 0 and ct is not None else None
                 )
                 return BenchResult(True, resp.status, latency_ms,
                                    ttft_ms=ttft_ms,
@@ -484,11 +503,17 @@ class LLMClient:
                                error=f"stream_error: {e}")
 
 
-async def warmup(client: LLMClient, n: int, max_tokens: int):
+async def warmup(client: LLMClient, n: int, max_tokens: int, prompt: str):
+    """Send the measurement request shape; exclude these results from metrics."""
     print(f"Warmup ({n} requests)...")
+    results = []
     for _ in range(n):
-        await client.chat("Say 'ok'.", max_tokens=min(max_tokens, 10))
+        results.append(await client.chat(prompt, max_tokens=max_tokens))
         await asyncio.sleep(0.1)
+    successful = sum(r.success for r in results)
+    if successful < n:
+        print(f"  Warmup: {successful}/{n} successful; prewarming is not assured.")
+    return results
 
 
 async def run_burst(
@@ -502,7 +527,9 @@ async def run_burst(
 
     The same fixed prompt is sent to every request so that:
       - per-request throughput comparisons are apples-to-apples;
-      - providers that cache prompts (OpenAI/Anthropic) can hit cache.
+      - providers that cache prompts may reuse eligible cached prefixes.
+    Cache hits are not measured or guaranteed, even after warmup. Later levels
+    reuse the same prompt too, so round number does not identify cold/hot data.
     Returns (results: List[BenchResult], elapsed_s: float, peak_req_per_sec: float).
 
     - elapsed_s: total wall time across all rounds (avg throughput denominator).
@@ -544,9 +571,9 @@ async def run_steady(
     max_tokens: int,
     prompt: str,
 ) -> tuple:
-    """Steady mode: concurrency workers sustain load for duration_s seconds.
+    """Steady mode: start requests for duration_s seconds, then drain in-flight.
 
-    Returns (results: List[BenchResult], elapsed_s: float).
+    Returns (results: List[BenchResult], elapsed_s: float), including drain time.
     """
     if concurrency <= 0:
         raise ValueError("concurrency must be positive")
@@ -597,7 +624,8 @@ def summarize_level(
     Throughput semantics:
       - burst:  `req_per_sec` is average across all rounds (total ok / total
                 wall time). `peak_req_per_sec` is the fastest single round.
-      - steady: `req_per_sec` is sustained throughput over the duration window.
+      - steady: `req_per_sec` is completed requests / actual elapsed, including
+                the drain of requests started before the dispatch deadline.
                 `peak_req_per_sec` is left at 0 (n/a).
     """
     ok = [r for r in results if r.success]
@@ -606,6 +634,7 @@ def summarize_level(
 
     summary: Dict[str, Any] = {
         "concurrency": concurrency,
+        "elapsed_s": elapsed_s,
         "total": total,
         "successful": len(ok),
         "failed": len(fail),
@@ -624,8 +653,7 @@ def summarize_level(
 
     lats = [r.latency_ms for r in ok]
     ttfts = [r.ttft_ms for r in ok if r.ttft_ms > 0]
-    per_req_tps = [r.per_request_tok_per_sec for r in ok
-                   if r.per_request_tok_per_sec > 0]
+    per_req_tps = [r.per_request_tok_per_sec for r in ok]
 
     summary["avg_latency_ms"] = mean(lats)
     summary["p50_latency_ms"] = percentile(lats, 0.50)
@@ -638,18 +666,24 @@ def summarize_level(
     # Burst-only: peak throughput of the fastest round (see run_burst).
     if mode == "burst" and peak_req_per_sec > 0:
         summary["peak_req_per_sec"] = peak_req_per_sec
+    prompt_counts = [r.tokens_prompt for r in ok]
+    completion_counts = [r.tokens_completion for r in ok]
+    prompt_known = all(v is not None for v in prompt_counts)
+    completion_known = all(v is not None for v in completion_counts)
+    completion_total = sum(completion_counts) if completion_known else None
     summary["completion_tok_per_sec"] = (
-        sum(r.tokens_completion for r in ok) / elapsed_s
-        if elapsed_s > 0 else 0
+        completion_total / elapsed_s
+        if completion_known and elapsed_s > 0 else None
     )
     summary["per_request_tok_per_sec"] = (
-        mean(per_req_tps) if per_req_tps else 0
+        mean(per_req_tps)
+        if completion_known and all(v is not None for v in per_req_tps) else None
     )
 
     summary["tokens"] = {
-        "prompt_total": sum(r.tokens_prompt for r in ok),
-        "completion_total": sum(r.tokens_completion for r in ok),
-        "avg_completion": mean([r.tokens_completion for r in ok]),
+        "prompt_total": sum(prompt_counts) if prompt_known else None,
+        "completion_total": completion_total,
+        "avg_completion": mean(completion_counts) if completion_known else None,
     }
 
     if fail:
@@ -681,6 +715,7 @@ def generate_report(config: dict, summaries: list) -> str:
     lines.append("| Item | Value |")
     lines.append("|------|-------|")
     lines.append(f"| Model | `{config['model']}` |")
+    lines.append(f"| Provider Preset | {config.get('provider') or 'manual'} |")
     lines.append(f"| API | `{config['base_url']}` |")
     lines.append(f"| Mode | {config['mode']} |")
     lines.append(f"| Date | {config['timestamp']} |")
@@ -689,11 +724,36 @@ def generate_report(config: dict, summaries: list) -> str:
     if config["mode"] == "burst":
         lines.append(f"| Rounds | {config['rounds']} per level |")
     else:
-        lines.append(f"| Duration | {config['duration']}s |")
+        lines.append(f"| Dispatch Window | {config['duration']}s per level |")
     lines.append(f"| Max Tokens | {config['max_tokens']} |")
     lines.append(f"| Token Parameter | `{config['token_param']}` |")
     lines.append(f"| Stream | {'Yes' if config['stream'] else 'No'} |")
+    if config["stream"]:
+        lines.append(
+            f"| Request Stream Usage | {'Yes' if config.get('stream_usage', True) else 'No'} |"
+        )
+    # JSON notation preserves newlines/whitespace; HTML entities keep arbitrary
+    # prompt text from creating Markdown table cells or markup.
+    prompt = html.escape(json.dumps(config.get("prompt", ""), ensure_ascii=False))
+    prompt = prompt.translate(str.maketrans({
+        "|": "&#124;", "`": "&#96;", "\\": "&#92;", "*": "&#42;",
+        "_": "&#95;", "[": "&#91;", "]": "&#93;",
+    }))
+    lines.append(f"| Prompt | {prompt} (JSON string) |")
+    lines.append(
+        f"| Warmup | {config.get('warmup', 0)} requests once before all levels "
+        f"({config.get('warmup_successful', 0)} successful; excluded from metrics) |"
+    )
+    lines.append(f"| Timeout | {config.get('timeout', 'n/a')}s per request |")
+    lines.append(f"| Python Version | {config.get('python_version', 'n/a')} |")
+    lines.append(f"| aiohttp Version | {config.get('aiohttp_version', 'n/a')} |")
     lines.append("")
+    if config["mode"] == "steady":
+        lines.append(
+            "The dispatch window limits when new requests start. In-flight "
+            "requests finish afterward; elapsed time and req/s include this drain."
+        )
+        lines.append("")
 
     # ── Overview Table ──
     has_ttft = any("ttft_avg_ms" in s for s in summaries)
@@ -701,7 +761,7 @@ def generate_report(config: dict, summaries: list) -> str:
     lines.append("## Overview")
     lines.append("")
 
-    cols = ["C", "Success%", "Avg Lat (ms)", "P50 (ms)", "P95 (ms)"]
+    cols = ["C", "Success%", "Elapsed (s)", "Avg Lat (ms)", "P50 (ms)", "P95 (ms)"]
     if has_ttft:
         cols.append("TTFT (ms)")
     cols.append("req/s (avg)")
@@ -723,7 +783,8 @@ def generate_report(config: dict, summaries: list) -> str:
         else:
             avg_l = p50 = p95 = "-"
 
-        cells = [str(c), sr, avg_l, p50, p95]
+        elapsed = f"{s['elapsed_s']:.3f}" if "elapsed_s" in s else "-"
+        cells = [str(c), sr, elapsed, avg_l, p50, p95]
         if has_ttft:
             cells.append(f"{s['ttft_avg_ms']:.0f}" if "ttft_avg_ms" in s else "-")
         rps = f"{s['req_per_sec']:.1f}" if s.get("req_per_sec") else "-"
@@ -732,12 +793,17 @@ def generate_report(config: dict, summaries: list) -> str:
             cells.append(f"{s['peak_req_per_sec']:.1f}"
                          if "peak_req_per_sec" in s else "-")
         ctps = (f"{s['completion_tok_per_sec']:.1f}"
-                if s.get("completion_tok_per_sec") else "-")
+                if s.get("completion_tok_per_sec") is not None else "n/a")
         prtps = (f"{s['per_request_tok_per_sec']:.1f}"
-                 if s.get("per_request_tok_per_sec") else "-")
+                 if s.get("per_request_tok_per_sec") is not None else "n/a")
         cells += [ctps, prtps]
         lines.append("| " + " | ".join(cells) + " |")
 
+    lines.append("")
+    lines.append(
+        "Token rates are n/a when completion usage is missing from "
+        "any successful request; reported zero tokens remain 0.0."
+    )
     lines.append("")
 
     # ── Conclusion ──
@@ -853,6 +919,7 @@ async def run(args):
 
     config = {
         "base_url": args.base_url,
+        "provider": args.provider.lower() if args.provider else "manual",
         "model": args.model,
         "token_param": args.token_param,
         "mode": args.mode,
@@ -862,8 +929,13 @@ async def run(args):
         "duration": args.duration,
         "max_tokens": args.max_tokens,
         "stream": args.stream,
+        "stream_usage": args.stream_usage,
         "prompt": args.prompt,
-        "timestamp": datetime.now().isoformat(),
+        "warmup": args.warmup,
+        "timeout": args.timeout,
+        "python_version": platform.python_version(),
+        "aiohttp_version": aiohttp.__version__,
+        "timestamp": datetime.now().astimezone().isoformat(),
     }
 
     print("=" * 55)
@@ -878,7 +950,7 @@ async def run(args):
     if config["mode"] == "burst":
         print(f"  Rounds:   {config['rounds']} per level")
     else:
-        print(f"  Duration: {config['duration']}s per level")
+        print(f"  Dispatch: {config['duration']}s per level, then drain")
     print(f"  Stream:   {config['stream']}")
     print()
 
@@ -892,9 +964,13 @@ async def run(args):
         timeout_s=args.timeout, stream=config["stream"],
         max_connections=config["connection_limit"],
         token_param=config["token_param"],
+        stream_usage=config["stream_usage"],
     ) as client:
 
-        await warmup(client, args.warmup, config["max_tokens"])
+        warmup_results = await warmup(
+            client, args.warmup, config["max_tokens"], config["prompt"],
+        )
+        config["warmup_successful"] = sum(r.success for r in warmup_results)
 
         for lvl in levels:
             peak = 0.0
@@ -916,11 +992,13 @@ async def run(args):
             total_count = s["total"]
 
             # Print inline progress
-            msg = f"  c={lvl}  OK={ok_count}/{total_count}"
+            msg = f"  c={lvl}  OK={ok_count}/{total_count}  elapsed={elapsed:.3f}s"
             if ok_count > 0 and "avg_latency_ms" in s:
+                comp_tps = s["completion_tok_per_sec"]
+                comp_label = f"{comp_tps:.1f}" if comp_tps is not None else "n/a"
                 msg += (f"  avg={s['avg_latency_ms']:.0f}ms"
                         f"  req/s={s['req_per_sec']:.1f}"
-                        f"  comp_tok/s={s['completion_tok_per_sec']:.1f}")
+                        f"  comp_tok/s={comp_label}")
             print(msg)
 
             all_raw[f"c{lvl}"] = [asdict(r) for r in results]

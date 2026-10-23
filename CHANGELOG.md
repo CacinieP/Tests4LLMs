@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finish without a `[DONE]` marker.
 - `--token-param` for endpoints that need an explicit
   `max_tokens`/`max_completion_tokens` override.
+- `--no-stream-usage` to omit the entire `stream_options` object for streaming
+  endpoints that reject it. The default still requests `include_usage`.
+- Report configuration now includes the provider (or `manual`), prompt, warmup
+  count, timeout, and Python/aiohttp versions. Per-level `elapsed_s` is saved in
+  JSON and displayed in the Markdown overview.
 
 ### Changed
 - The connection-pool limit now matches the highest requested concurrency
@@ -26,8 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sustained endpoint throughput without client-side pacing.
 - CI now runs the behavioral test suite and compile-checks and lints the test
   module as well as the main script.
+- Warmup now uses the measured prompt, max-token limit, token field and
+  streaming options. It runs sequentially once before all concurrency levels,
+  displays the successful count, and is excluded from measurements;
+  `--warmup 0` disables it. Full-length warmup can increase API costs.
+- Missing server usage is represented by `null` token counts and rates in JSON
+  and `n/a` in Markdown, without estimating tokens from output text.
+- Steady reports label `--duration` as the dispatch window. Actual elapsed time
+  and throughput include completion of requests still in flight after it ends.
+- Clarified that provider presets are configuration snapshots, fixed prompts
+  do not guarantee cache hits, and round numbers do not identify cache state.
+  The `kimi` preset targets the Moonshot Open Platform; other Kimi services
+  require their own manual endpoint, model and credential configuration.
 
 ### Fixed
+- Non-stream latency now includes reading the entire response body, including
+  HTTP error bodies, rather than stopping when response headers arrive.
 - Streaming TTFT now recognizes `delta.reasoning_content`, used by reasoning
   models such as Kimi-K3, in addition to `delta.content` and `delta.text`.
 - Streaming requests stop reading as soon as `[DONE]` arrives instead of
