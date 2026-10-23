@@ -101,6 +101,14 @@ python tests4llms-v0.2.py \
   --stream
 ```
 
+By default, streaming requests include `stream_options: {"include_usage": true}`.
+For endpoints that reject this field, add `--no-stream-usage` to omit the entire
+`stream_options` object. Missing server usage is reported as `null` in JSON and
+`n/a` in Markdown; token counts are not estimated from output text.
+流式请求默认请求 usage。若端点拒绝 `stream_options`，加 `--no-stream-usage`
+可完全省略该字段；服务端未返回的 token 统计在 JSON 中为 `null`、Markdown 中为
+`n/a`，不会根据输出文字估算。
+
 ---
 
 ## Third-party Relays / 第三方中转
@@ -160,9 +168,10 @@ Useful troubleshooting / 常见排查：
   `--token-param max_completion_tokens`. / 切换输出 token 字段。
 - `429 rate_limited`: reduce `--concurrency`, `--rounds`, or steady-mode
   duration. Start with `1,3,5` and one round. / 降低并发、轮次或测试时长。
-- Add `--stream` only when the relay supports SSE streaming and
-  `stream_options.include_usage`; otherwise omit it. / 中转支持流式和 usage
-  统计时再启用。
+- Use `--stream` when the relay supports SSE streaming. If it rejects
+  `stream_options`, add `--no-stream-usage`; usage-dependent metrics will be
+  unavailable unless the server still returns usage. / 中转支持 SSE 即可启用流式；
+  若拒绝 `stream_options`，加 `--no-stream-usage`，缺少 usage 时相关指标不可用。
 - Relays requiring `x-api-key`, custom signatures, or other non-Bearer
   headers need a code change; the current CLI does not configure arbitrary
   headers. / 当前版本仅支持 Bearer 鉴权，不支持自定义请求头。
@@ -181,8 +190,12 @@ Fire `concurrency` requests **simultaneously**, repeat `--rounds` times.
 
 ### Steady / 稳态模式 (`--mode steady`)
 
-`concurrency` workers sustain load for `--duration` seconds.
-`concurrency` 个 worker 持续发请求 `--duration` 秒。
+`concurrency` workers dispatch requests during the `--duration`-second window,
+then wait for requests already in flight to finish. The actual elapsed time can
+exceed this window; req/s and token throughput use that full elapsed time,
+including the final drain.
+`concurrency` 个 worker 在 `--duration` 秒的发请求窗口内持续请求，窗口结束后等待
+在途请求完成。实际耗时可能更长；req/s 与 token 吞吐的分母均为包含收尾等待的实际耗时。
 
 - Measures: real sustained throughput (req/s, completion tok/s) / 测量：真实持续吞吐
 - Best for: capacity planning, rate-limit probing / 适合：容量规划、限速探测
@@ -201,13 +214,14 @@ Fire `concurrency` requests **simultaneously**, repeat `--rounds` times.
 | `--mode` | `burst` | `burst` or `steady` / 瞬发或稳态模式 |
 | `--concurrency` | `1,5,10,20` | Comma-separated concurrency levels / 并发级别 |
 | `--rounds` | `1` | Burst: repeat count per level; ignored in steady mode / 瞬发模式每级轮次 |
-| `--duration` | `30` | Steady: seconds per level; ignored in burst mode / 稳态模式每级时长 |
+| `--duration` | `30` | Steady: dispatch window in seconds per level; ignored in burst mode / 稳态模式每级发请求窗口（秒） |
 | `--max-tokens` | `100` | Max tokens per request / 单次最大 token 数 |
 | `--token-param` | preset-specific* | `max_tokens` or `max_completion_tokens`; manual default is `max_tokens` / 输出 token 字段 |
 | `--stream` | off | Enable streaming, measures TTFT / 流式 + 首字延迟 |
+| `--no-stream-usage` | off | Omit `stream_options` in streaming requests / 流式请求不发送 `stream_options` |
 | `--prompt` | `Count from 1 to 10.` | Test prompt / 测试提示词 |
 | `--timeout` | `120` | Request timeout in seconds / 超时（秒） |
-| `--warmup` | `2` | Warmup requests / 预热请求数 |
+| `--warmup` | `2` | Sequential warmup requests before all concurrency levels; `0` disables / 所有并发档之前顺序预热的请求数，`0` 禁用 |
 | `--output-dir` | `.` | Directory for `result.json` and `report.md` / 结果目录 |
 
 \* `--base-url` and `--model` are required unless `--provider` supplies them.
@@ -221,14 +235,26 @@ Provider presets also choose `--token-param`.
 |--------|---------------------|
 | `success_rate` | Successful requests / total (%) / 成功率 |
 | `error_rate` | Failed requests / total (%) / 错误率 |
-| `avg_latency_ms` | Average latency of successful requests / 平均延迟 |
+| `avg_latency_ms` | Average latency of successful requests; non-stream latency includes reading the full response body / 平均延迟；非流式延迟包含完整响应体读取 |
 | `p50_latency_ms` | Median latency / 中位延迟 |
 | `p95_latency_ms` | 95th percentile latency / P95 延迟 |
 | `ttft_avg_ms` | Average time to first `content`, `text`, or `reasoning_content` token (stream only) / 首个正文或推理 token 延迟（仅流式） |
-| `req_per_sec` | Average successful requests per second (burst: across all rounds; steady: sustained over the window) / 平均每秒成功请求数 |
+| `req_per_sec` | Successful requests / actual elapsed time (burst: across all rounds; steady: includes in-flight requests finishing after the dispatch window) / 成功请求数除以实际耗时，稳态含窗口结束后的收尾等待 |
 | `peak_req_per_sec` | Burst only: throughput of the fastest single round / 瞬发模式独有：最快一轮的吞吐 |
 | `completion_tok_per_sec` | Total completion tokens / elapsed time / 系统级输出吞吐 |
 | `per_request_tok_per_sec` | Per-request: completion_tokens / latency / 单请求输出吞吐 |
+| `elapsed_s` | Actual elapsed seconds per concurrency level, saved in JSON and shown as `Elapsed (s)` in the report / 每个并发档的实际耗时，写入 JSON 并显示于报告 |
+
+Token counts and token throughput require server-provided usage. Missing usage
+is `null` in JSON and `n/a` in Markdown, rather than zero or an estimate.
+token 数与吞吐依赖服务端 usage；缺失时用 JSON `null` / Markdown `n/a` 表示，
+不记作零，也不估算。
+
+Non-stream latency is recorded after the full response body is read, including
+for HTTP error responses. Streaming TTFT includes reasoning output, so it may
+precede the first user-visible answer text.
+非流式延迟在完整响应体读取后记录，HTTP 错误响应也采用同一口径。流式 TTFT 包含推理
+输出，因此可能早于首个可见答案文字。
 
 ---
 
@@ -241,8 +267,13 @@ Provider presets also choose `--token-param`.
 
 ### report.md Sections / 报告章节
 
-- **Configuration** — model, API, mode, date, params / 模型、API、模式、日期、参数
-- **Overview** — one row per concurrency level with all metrics / 每行一个并发级别，包含全部指标
+- **Configuration** — provider (`manual` without a preset), model, API, mode,
+  date, prompt (with escaped line breaks), warmup count, timeout, Python and
+  aiohttp versions, and request parameters. Steady duration is labeled
+  **Dispatch Window**. / 供应商（未用预设时为 `manual`）、模型、API、模式、日期、
+  提示词（转义换行）、预热数、超时、Python/aiohttp 版本和请求参数；稳态时长标为发请求窗口。
+- **Overview** — one row per concurrency level with summary metrics and actual
+  elapsed seconds / 每行一个并发级别，显示汇总指标与实际耗时
 - **Conclusion** — auto-generated: best latency level, best throughput level, success rate inflection point / 自动生成：最佳低延迟档、最佳吞吐档、成功率拐点
 
 ---
@@ -262,8 +293,16 @@ Use `--provider <name>` for quick setup, or manually specify `--base-url --api-k
 | OpenAI | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.4` |
 | Anthropic | `anthropic` | `https://api.anthropic.com/v1/` | `ANTHROPIC_API_KEY` | `claude-opus-5` |
 
-Default models may change over time. Override a preset with `--model` without
-editing the script. / 默认模型可能随时间变化，可直接用 `--model` 覆盖。
+Presets are snapshots of the values in this script; they are not a live model
+catalog. Check your service's current documentation and override parameters
+without editing the script. / 预设只是脚本内的配置快照，并非实时模型目录；请按服务实际
+文档通过命令行覆盖参数。
+
+The `kimi` preset points to the Moonshot Open Platform URL shown above. Other
+Kimi services, including Kimi Code, need their own endpoint, model and
+credentials configured manually; do not assume credentials are interchangeable.
+`kimi` 预设指向上表的 Moonshot 开放平台地址。Kimi Code 等其他 Kimi 服务应按各自的
+地址、模型与凭证手动配置，不能假定不同服务的凭证通用。
 
 The Anthropic preset uses its
 [official OpenAI SDK compatibility layer](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk).
@@ -281,11 +320,25 @@ default to `max_tokens`.
 - Burst results are more stable with multiple rounds; steady results are more
   representative with a longer duration. Increase load gradually. /
   多轮瞬发和更长稳态测试更有代表性，请逐步增加负载。
-- The same prompt is reused for fair comparison and cache friendliness.
-  Provider-side prompt caching may affect latency and billing. /
-  所有请求使用同一提示词，供应商缓存可能影响延迟与计费。
-- Successful HTTP transport is not enough: empty or truncated completions are
-  counted as failures. / 空响应和截断响应会被计为失败。
+- Warmup runs once before the concurrency sweep: `--warmup` requests are sent
+  sequentially with the measured prompt, max-token limit, token field and
+  streaming options. Warmup requests are excluded from measurements, and their
+  successful count is displayed. Set `--warmup 0` to disable them. Using the
+  full request shape can cost more than the former short warmup. / 所有并发档之前
+  只执行一次预热，顺序发出指定次数，使用与测量相同的提示词、token 上限、token 字段和
+  流式选项。预热不计入结果，会显示成功数；`--warmup 0` 可关闭。完整请求预热可能比
+  原来的短预热产生更多费用。
+- The same prompt is reused, so provider-side caching may affect latency and
+  billing. Warmup does not guarantee a cache hit, and rounds do not reliably
+  identify cold versus warm requests. Even with `--rounds 1`, later concurrency
+  levels may reuse a cache populated by earlier requests. / 所有请求复用同一提示词，
+  供应商缓存可能影响延迟和计费；预热不保证命中缓存，轮次也不能可靠区分冷热请求。
+  即使 `--rounds 1`，后续并发档也可能复用先前请求填充的缓存。
+- Successful HTTP transport is not enough: responses without completion choices
+  and SSE streams that end before a completion marker are counted as failures.
+  Reaching the model's output-token limit is not classified as a transport
+  failure. / 没有 completion choices 的响应与在结束标记前断开的 SSE 流会计为失败；
+  达到模型输出 token 上限不属于传输失败。
 - Do not commit API keys or paste them into `--api-key` in shared shell
   sessions. Prefer `--api-key-env`. / 请勿提交密钥，优先使用环境变量。
 
