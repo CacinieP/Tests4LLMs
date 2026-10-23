@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from aiohttp import web
 
@@ -327,25 +328,35 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(re.findall(r"(?<!\\)\|", prompt_row)), 3)
 
     async def test_steady_elapsed_includes_draining_in_flight_request(self):
-        async def handler(request):
-            await asyncio.sleep(0.08)
-            return web.json_response({
-                "choices": [{"message": {"content": "ok"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1,
-                          "total_tokens": 2},
-            })
+        now = 0.0
+        request_started = asyncio.Event()
+        release_response = asyncio.Event()
 
-        base_url = await self.start_server(handler)
-        async with BENCH.LLMClient(
-            base_url, "test-key", "test-model",
-        ) as client:
-            results, elapsed = await BENCH.run_steady(
+        async def chat(prompt, max_tokens):
+            request_started.set()
+            await release_response.wait()
+            return BENCH.BenchResult(True, 200, 80)
+
+        # Advance the benchmark clock only after dispatch. This tests a request
+        # finishing after the deadline without depending on OS scheduling speed.
+        client = Mock(chat=chat)
+        with patch.object(BENCH, "time") as clock:
+            clock.perf_counter.side_effect = lambda: now
+            task = asyncio.create_task(BENCH.run_steady(
                 client, 1, 0.03, 10, "hello",
-            )
+            ))
+            try:
+                await asyncio.wait_for(request_started.wait(), timeout=5)
+                now = 0.08
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+            finally:
+                release_response.set()
+            results, elapsed = await task
 
         self.assertEqual(len(results), 1)
         self.assertTrue(results[0].success)
-        self.assertGreaterEqual(elapsed, 0.07)
+        self.assertEqual(elapsed, 0.08)
         summary = BENCH.summarize_level(results, 1, elapsed, mode="steady")
         self.assertEqual(summary["elapsed_s"], elapsed)
         self.assertAlmostEqual(summary["req_per_sec"], 1 / elapsed)
